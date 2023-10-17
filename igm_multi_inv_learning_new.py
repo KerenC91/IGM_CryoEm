@@ -1,5 +1,4 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = "0"
 
 # -*- coding: utf-8 -*-
 """IGM_learning.ipynb
@@ -45,6 +44,12 @@ import utils.data_utils as data_utils
 #from torch.nn import functional as F
 import random
 import argparse
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3"
+torch.cuda.set_device(2)
+torch.cuda.empty_cache()
+
+DEBUG = False
 
 def main_function(args):
 
@@ -233,17 +238,18 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 ## debugging args - Keren
-    args.task = 'denoising'
-    args.latent_dim = 40
-    args.generator_type = 'deepdecoder'
-    args.num_imgs = 5
-    args.dataset = 'MNIST'
-    args.sigma = 0.5
-    args.image_size = 64
-    args.batchGD = True
-    args.class_idx = 8
-    args.GMM_EPS = 1e-3
-    args.latent_type = "gmm"
+    if DEBUG is True:
+        args.task = 'denoising'
+        args.latent_dim = 40
+        args.generator_type = 'deepdecoder'
+        args.num_imgs = 5
+        args.dataset = 'MNIST'
+        args.sigma = 0.5
+        args.image_size = 64
+        args.batchGD = True
+        args.class_idx = 8
+        args.GMM_EPS = 1e-3
+        args.latent_type = "gmm"
     
 ## debugging end
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
