@@ -14,35 +14,35 @@ Original file is located at
 #drive.mount('/content/drive')
 
 #cd 'drive/MyDrive/ML_projects/IGM-journal'
-
+import matplotlib
 import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.init as init
-import torch.nn.functional as functional
-from torchvision import datasets, transforms
-from torchvision.utils import save_image
-import matplotlib.pyplot as plt
-import matplotlib
-from torch.autograd import Variable
+#import torch.nn as nn
+#import torch.nn.init as init
+#import torch.nn.functional as functional
+#from torchvision import datasets, transforms
+#from torchvision.utils import save_image
+#import matplotlib.pyplot as plt
+#import matplotlib
+#from torch.autograd import Variable
 
 torch.set_default_dtype(torch.float32)
-import torch.optim as optim
-import pickle
-import math
-from torch import Tensor
+#import torch.optim as optim
+#import pickle
+#import math
+#from torch import Tensor
 import json
 
 ## IMPORTS
-import generative_model
-import utils
+#import generative_model
+#import utils
 import generative_model.model_utils as model_utils
 import utils.training_utils as training_utils
 import utils.data_utils as data_utils
 
 # from sys import exit
-import matplotlib.pyplot as plt
-from torch.nn import functional as F
+#import matplotlib.pyplot as plt
+#from torch.nn import functional as F
 import random
 import argparse
 
@@ -124,6 +124,7 @@ def main_function(args):
 if __name__ == "__main__":
 
     ################################################## SETUP ARGUMENTS ########################################################
+    matplotlib.use('Qt5Agg')
 
     parser = argparse.ArgumentParser(description='Learning the IGM')
 
@@ -231,7 +232,20 @@ if __name__ == "__main__":
                              '(default: "")')
 
     args = parser.parse_args()
-
+## debugging args - Keren
+    args.task = 'denoising'
+    args.latent_dim = 40
+    args.generator_type = 'deepdecoder'
+    args.num_imgs = 5
+    args.dataset = 'MNIST'
+    args.sigma = 0.5
+    args.image_size = 64
+    args.batchGD = True
+    args.class_idx = 8
+    args.GMM_EPS = 1e-3
+    args.latent_type = "gmm"
+    
+## debugging end
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     torch.manual_seed(args.seed)

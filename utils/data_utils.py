@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.init as init
 import torch.nn.functional as functional
 from torchvision import datasets, transforms
-from torchvision.utils import save_image
+#from torchvision.utils import save_image
 import matplotlib.pyplot as plt
 import matplotlib
 import sys,inspect
@@ -14,10 +14,10 @@ import os
 import zipfile 
 import torch
 # import natsort
-# from natsort import natsorted
+from natsort import natsorted
 from PIL import Image
 from torch.utils.data import Dataset
-from torchvision import transforms
+#from torchvision import transforms
 
 # os.environ['CUDA_VISIBLE_DEVICES'] = "1"
 seed = 100
@@ -370,9 +370,18 @@ def get_true_and_noisy_data(image_size,
         if objective == 'learning':
             list_of_transforms = transforms.Compose([transforms.ToTensor(), 
                                                     transforms.Resize(size=(image_size,image_size))])
+            # Check if the dataset exists in the specified directory
+            if not os.path.exists('./data/MNIST'):
+                print("Downloading MNIST dataset...")
+                datasets.MNIST('./data', train=False, download=True, 
+                               transform=list_of_transforms)
+            else:
+                print("MNIST dataset already exists.")
+            
+            # load the dataset
             test_imgs = datasets.MNIST('./data', train=False, download=False,
                                   transform=list_of_transforms)
-        
+      
             if class_idx is not None:
                 idx = test_imgs.targets==class_idx
                 test_imgs.targets = test_imgs.targets[idx]

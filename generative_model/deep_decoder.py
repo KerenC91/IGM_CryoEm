@@ -3,8 +3,8 @@ import torch
 import torch.nn as nn
 import torch.nn.init as init
 import torch.nn.functional as functional
-from torchvision import datasets, transforms
-from torchvision.utils import save_image
+#from torchvision import datasets, transforms
+#from torchvision.utils import save_image
 import matplotlib.pyplot as plt
 import matplotlib
 import os,sys,inspect
