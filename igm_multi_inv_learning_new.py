@@ -38,6 +38,7 @@ import json
 import generative_model.model_utils as model_utils
 import utils.training_utils as training_utils
 import utils.data_utils as data_utils
+import debug.debug as debug
 
 # from sys import exit
 #import matplotlib.pyplot as plt
@@ -237,21 +238,10 @@ if __name__ == "__main__":
                              '(default: "")')
 
     args = parser.parse_args()
-## debugging args - Keren
+    ## debugging args - Keren
     if DEBUG is True:
-        args.task = 'denoising'
-        args.latent_dim = 40
-        args.generator_type = 'deepdecoder'
-        args.num_imgs = 5
-        args.dataset = 'MNIST'
-        args.sigma = 0.5
-        args.image_size = 64
-        args.batchGD = True
-        args.class_idx = 8
-        args.GMM_EPS = 1e-3
-        args.latent_type = "gmm"
-    
-## debugging end
+        debug.set_args(args)
+    ## debugging end
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     torch.manual_seed(args.seed)
