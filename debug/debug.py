@@ -68,7 +68,8 @@ def plot_losses_comparison(*args, **kwargs):
     # Create lambda function taking values in jumps of jump_size
     jump_over_array = lambda array: array[::jump_size]
     base_folder = kwargs.get('base_folder', None)
-    loss_file = kwargs.get('loss_file', None)
+    loss_name = kwargs.get('loss_name', None)
+    loss_file = f"{loss_name}.npy"
     clip_epochs = kwargs.get('clip_epochs', None)
     # Get minimal number of epochs
     min_epoch = 99001
@@ -101,6 +102,8 @@ def plot_losses_comparison(*args, **kwargs):
     for i in range(num_args):
         plt.plot(losses_list[i], label=comparison_details[i])
     plt.legend()
+    plt.xlabel("epochs")
+    plt.ylabel(f"{loss_name}")
     plt.title(f'{title}, epochs={min_epoch}')
     plt.savefig(f'./{output_folder}/{output_file}.png')
     plt.close()
@@ -146,7 +149,7 @@ def get_folders_list(comparison_param, comparison_details):
     return folders
 
 
-def write_comparison_args(output_folder, output_file, comparison_param, comparison_details, folders):
+def write_comparison_args(output_folder, comparison_param, comparison_details, folders):
     labels = OrderedDict([
         ("comparison_param", comparison_param),
         ("comparison_details", comparison_details),
