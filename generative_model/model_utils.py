@@ -112,11 +112,12 @@ def get_latent_model(latent_dim, num_imgs, model_type):
                    torch.eye(latent_dim).to(device)] for i in range(num_imgs)]
     elif model_type == "gmm_low":
         list_of_models = [[torch.randn((latent_dim,)).to(device),
-                   torch.eye(latent_dim).to(device), 1e-3*torch.ones([latent_dim]).to(device)] for i in range(num_imgs)]
+                   torch.eye(latent_dim).to(device), 
+                   1e-3*torch.ones([latent_dim]).to(device)] for i in range(num_imgs)]
     elif model_type == "gmm_low_eye":
         list_of_models = [[torch.randn((latent_dim,)).to(device),
-                           torch.tril(torch.ones((latent_dim, latent_dim))).to(device),
-                           1e-3*torch.ones([latent_dim]).to(device)] for i in range(num_imgs)]
+                    torch.tril(torch.ones((latent_dim, latent_dim))).to(device),
+                    1e-3*torch.ones([latent_dim]).to(device)] for i in range(num_imgs)]
     elif model_type == 'flow':
         n_flow = 16
         affine = True
