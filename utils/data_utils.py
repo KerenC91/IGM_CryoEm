@@ -18,7 +18,7 @@ from natsort import natsorted
 from PIL import Image
 from torch.utils.data import Dataset
 #from torchvision import transforms
-
+import aspire
 # os.environ['CUDA_VISIBLE_DEVICES'] = "1"
 seed = 100
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -368,8 +368,7 @@ def get_true_and_noisy_data(image_size,
 
     if dataset == 'MNIST':
         if objective == 'learning':
-            list_of_transforms = transforms.Compose([transforms.ToTensor(), 
-                                                    transforms.Resize(size=(image_size,image_size))])
+            list_of_transforms = transforms.Compose([transforms.ToTensor(), transforms.Resize(size=(image_size,image_size))])
             # Check if the dataset exists in the specified directory
             if not os.path.exists('./data/MNIST'):
                 print("Downloading MNIST dataset...")
@@ -379,9 +378,8 @@ def get_true_and_noisy_data(image_size,
                 print("MNIST dataset already exists.")
             
             # load the dataset
-            test_imgs = datasets.MNIST('./data', train=False, download=False,
-                                  transform=list_of_transforms)
-      
+            test_imgs = datasets.MNIST('./data', train=False, download=False, 
+                           transform=list_of_transforms)
             if class_idx is not None:
                 idx = test_imgs.targets==class_idx
                 test_imgs.targets = test_imgs.targets[idx]
@@ -393,7 +391,7 @@ def get_true_and_noisy_data(image_size,
             test_imgs = []
             num_examples = 1
             list_of_transforms = transforms.Compose([transforms.ToTensor(), 
-                                                    transforms.Resize(size=(image_size,image_size))])
+                                                     transforms.Resize(size=(image_size,image_size))])            
             kwargs = {'num_workers': 1, 'pin_memory': True} if device == 'cuda' else {}
 
             for i in range(10):
@@ -441,6 +439,34 @@ def get_true_and_noisy_data(image_size,
         true_image_norm = 1 / (x - x.min()).max()
         x_01 = (x - x.min())/(x - x.min()).max()
         test_imgs = TensorDataset(Tensor(x_01),torch.ones([x.shape[0],1]))
+    elif dataset == "cryo_empiar10028":
+        data_path = '/home/kerencohen2/Git/IGM_CryoEm/data/particles/MRC_0601/10028/data/Particles/MRC_0601'
+        if objective == 'learning':
+            list_of_transforms = transforms.Compose([transforms.ToTensor(), 
+                                                    transforms.Resize(size=(image_size,image_size))])
+            # Check if the dataset exists in the specified directory
+            if not os.path.exists('./data/cryo_empiar10028'):
+                raise ValueError('dataset cryo_empiar10028 invalid')
+            
+            # load the dataset
+            test_imgs = []
+            for i in range(5):
+                test_imgs[i] = aspire.image.load_mrc(f'./data/cryo_empiar10028/00{i}_particles_shiny_nb50_new.mrcs')
+            test_imgs[0] = aspire.image.load_mrc('./data/cryo_empiar10028/001_particles_shiny_nb50_new.mrcs')
+            test_imgs[1] = aspire.image.load_mrc('./data/cryo_empiar10028/001_particles_shiny_nb50_new.mrcs')
+            test_imgs[2] = aspire.image.load_mrc('./data/cryo_empiar10028/001_particles_shiny_nb50_new.mrcs')
+            test_imgs[3] = aspire.image.load_mrc('./data/cryo_empiar10028/001_particles_shiny_nb50_new.mrcs')
+            test_imgs[4] = aspire.image.load_mrc('./data/cryo_empiar10028/001_particles_shiny_nb50_new.mrcs')
+
+            
+            #Adding transformers
+      
+            if class_idx is not None:
+                idx = test_imgs.targets==class_idx
+                test_imgs.targets = test_imgs.targets[idx]
+                test_imgs.data = test_imgs.data[idx]    
+
+            test_imgs.data = test_imgs.data[:num_imgs_total]
     else:
         raise ValueError('invalid dataset')
 
