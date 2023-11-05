@@ -40,12 +40,11 @@ import pickle
 import math
 from torch import Tensor
 import ehtim as eh
-
+import random
 from .eht_utils import empty_eht_obs, eht_observation_pytorch, Obs_params_torch
 from .vis_utils import true_image_path, true_obs_list, obs_params, object_from_dataset
 
 kwargs = {'num_workers': 1, 'pin_memory': True} if device == 'cuda' else {}
-
 
 ## Create a custom Dataset class
 class CelebADataset(Dataset):
@@ -354,7 +353,8 @@ def get_true_and_noisy_data(image_size,
                             objective,
                             front_facing,
                             cphase_count='min-cut0bl',
-                            envelope_params=None):
+                            envelope_params=None,
+                            rand_shift=False):
     ######### GET DATA ################
     kwargs = {'num_workers': 1, 'pin_memory': True} if device == 'cuda' else {}
 
@@ -386,6 +386,13 @@ def get_true_and_noisy_data(image_size,
                 test_imgs.data = test_imgs.data[idx]    
 
             test_imgs.data = test_imgs.data[:num_imgs_total]
+            
+            if rand_shift:
+                src = test_imgs.data[0]
+                for i in range(1, num_imgs_total):
+                    shift_x = random.randint(-image_size / 4, image_size / 4)
+                    shift_y = random.randint(-image_size / 4, image_size / 4)
+                    test_imgs.data[i] = torch.roll(src, (shift_y, shift_x), dims=(0, 1))
     
         elif objective == 'model-selection':
             test_imgs = []

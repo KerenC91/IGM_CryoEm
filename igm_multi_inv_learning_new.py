@@ -50,7 +50,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3"
 torch.cuda.set_device(2)
 torch.cuda.empty_cache()
 
-DEBUG = False
+DEBUG = True
 
 def main_function(args):
 
@@ -73,7 +73,8 @@ def main_function(args):
                                  objective=args.objective,
                                  front_facing=args.front_facing,
                                  cphase_count=args.cphase_count,
-                                 envelope_params=args.envelope)
+                                 envelope_params=args.envelope,
+                                 rand_shift=args.rand_shift)
     
     # Get generator:
     # - generator = neural network params
@@ -239,7 +240,10 @@ if __name__ == "__main__":
                              '(default: "")')
 
     parser.add_argument('--normalize_loss', action='store_true', default=False,
-                        help='normalizing the losses by num_imgs, latent_dim, etc'
+                        help='normalizing the losses.'
+                             '(default: False)')
+    parser.add_argument('--rand_shift', action='store_true', default=False,
+                        help='perform shifts on a single image, perform learning o those augmentations'
                              '(default: False)')
     
     args = parser.parse_args()
