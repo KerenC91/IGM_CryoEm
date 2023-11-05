@@ -23,6 +23,7 @@ def set_args(args: Namespace):
     args.class_idx = 8
     args.GMM_EPS = 1e-3
     args.latent_type = "gmm"
+    args.normalize_loss = True
 
 
 def get_loss(f_loss, f_loss_ent, f_loss_prior, f_loss_data, num_epoch):

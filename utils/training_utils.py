@@ -266,7 +266,8 @@ def train_latent_gmm_and_generator(models,
                                    centroid_params=None,
                                    locshift_params=False,
                                    from_checkpoint=False,
-                                   validate_args=False):
+                                   validate_args=False,
+                                   normalize_loss=False):
     # Initialize training params (+ load from checkpoint if specified)
 
     start_epoch = 0
@@ -295,6 +296,7 @@ def train_latent_gmm_and_generator(models,
 
     loss_list = []
     loss_data_list = []
+    loss_mean_true_lists = [[] for i in range(num_imgs_show)]
     loss_prior_list = []
     loss_ent_list = []
     loss_mag_list = []
@@ -408,7 +410,7 @@ def train_latent_gmm_and_generator(models,
                                           gamma=gamma)
 
                 loss_denoise = torch.mean(loss_data + log_ent + loss_prior)
-
+                                    
                 loss_sum = loss_sum + loss_denoise
                 loss_data_sum = loss_data_sum + torch.mean(loss_data)
                 loss_prior_sum = loss_prior_sum + torch.mean(loss_prior)
@@ -534,6 +536,10 @@ def train_latent_gmm_and_generator(models,
                 loss_data = loss_data_fit(img, target, sigma, As, task, idx=i, dataset=dataset,
                                           gamma=gamma, cp_scale=cphase_scale * phase_anneal[k],
                                           use_envelope=use_envelope)
+
+                if normalize_loss:
+                    loss_prior = torch.divide(loss_prior, latent_dim)
+                    loss_data = torch.divide(loss_data,image_size * image_size)
                 if 'closure-phase' in task:
                     loss_data, loss_mag, loss_phase = loss_data
 
@@ -543,9 +549,11 @@ def train_latent_gmm_and_generator(models,
                 else:
                     loss = torch.mean(loss_data + log_ent + loss_prior)
 
+
                 loss_sum = loss_sum + loss
                 loss_data_sum = loss_data_sum + torch.mean(loss_data)
                 loss_prior_sum = loss_prior_sum + torch.mean(loss_prior)
+                    
                 if 'closure-phase' in task:
                     loss_mag_sum += torch.mean(loss_mag)
                     loss_phase_sum += torch.mean(loss_phase)
@@ -563,9 +571,14 @@ def train_latent_gmm_and_generator(models,
             
             #cur_loss = loss.item()
         
-        loss_list.append(loss_sum.item())
-        loss_data_list.append(loss_data_sum.item())
-        loss_prior_list.append(loss_prior_sum.item())
+        if normalize_loss:
+            loss_list.append(loss_sum.item() / num_imgs)
+            loss_data_list.append(loss_data_sum.item() / num_imgs)
+            loss_prior_list.append(loss_prior_sum.item() / num_imgs)
+        else:
+            loss_list.append(loss_sum.item())
+            loss_data_list.append(loss_data_sum.item())
+            loss_prior_list.append(loss_prior_sum.item())
         if 'closure-phase' in task:
             loss_mag_list.append(loss_mag_sum.item())
             loss_phase_list.append(loss_phase_sum.item())
@@ -603,7 +616,29 @@ def train_latent_gmm_and_generator(models,
                 std_img_list = [get_avg_std_img(models[i], generator_func, 
                                                 latent_model, latent_dim, GMM_EPS, 
                                                 image_size, generator_type)[1] for i in img_indices]
+                #vall = torch.sum(avg_img_list[0] - true_imgs[0], (-1, -2)) / (image_size * image_size)
+                #shapee =torch.sum(avg_img_list[0] - true_imgs[0], (-1, -2)).size()
+                #print(f"keren shape={shapee}, val={vall}")
+                mean_true_diff_list = [
+                    np.abs(torch.sum(avg_img_list[i] - true_imgs[i], (-1, -2)).item()) / torch.norm(true_imgs[i]).item() 
+                    for i in img_indices
+                    ]
                 
+                for i in img_indices:
+                    loss_mean_true_lists[i].append(mean_true_diff_list[i])
+                
+                
+                plt.figure()
+                for i in img_indices:
+                    plt.plot(loss_mean_true_lists[i], label=f"model {i+1}")
+                plt.legend()
+                plt.xlabel('epochs')
+                plt.ylabel('|mu-x|/num_pixels')
+                plt.title('loss of mean vs true images')
+                plt.savefig(f'./{sup_folder}/{folder}/loss mean true.png')
+                plt.close()
+
+
                 plt.figure()
                 plt.plot(loss_list)
                 plt.savefig(f'./{sup_folder}/{folder}/loss.png')

@@ -50,7 +50,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3"
 torch.cuda.set_device(2)
 torch.cuda.empty_cache()
 
-DEBUG = True
+DEBUG = False
 
 def main_function(args):
 
@@ -122,7 +122,8 @@ def main_function(args):
                                           centroid_params=args.centroid,
                                           locshift_params=args.locshift,
                                           from_checkpoint=args.from_checkpoint,
-                                          validate_args=args.validate_args)
+                                          validate_args=args.validate_args,
+                                          normalize_loss=args.normalize_loss)
 
 
 
@@ -237,6 +238,10 @@ if __name__ == "__main__":
                         help='string add to end of directory name for hacky reasons '
                              '(default: "")')
 
+    parser.add_argument('--normalize_loss', action='store_true', default=False,
+                        help='normalizing the losses by num_imgs, latent_dim, etc'
+                             '(default: False)')
+    
     args = parser.parse_args()
     ## debugging args - Keren
     if DEBUG is True:
