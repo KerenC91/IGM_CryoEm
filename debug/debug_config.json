@@ -1,0 +1,37 @@
+{
+  "loss_names": [
+    "loss",
+    "loss_data",
+    "loss_ent",
+    "loss_prior"
+  ],
+  "comparison_params": [
+    "num_imgs",
+    "latent_dim",
+    "sigma",
+    "latent_type"
+  ],
+  "comparison_details_dict": {
+    "num_imgs": [
+      "5",
+      "35",
+      "75",
+      "150"
+    ],
+    "latent_dim": [
+      "8",
+      "40",
+      "150"
+    ],
+    "sigma": [
+      "0.5",
+      "1.0",
+      "2.0"
+    ],
+    "latent_type": [
+      "gmm",
+      "gmm_custom",
+      "gmm_eye"
+    ]
+  }
+}

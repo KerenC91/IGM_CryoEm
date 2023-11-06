@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 import torch
 import aspire
@@ -159,6 +161,16 @@ def write_comparison_args(output_folder, comparison_param, comparison_details, f
     with open(f'./{output_folder}/params_comp_{comparison_param}.yaml', "w") as f:
         yaml.dump(labels, f)
 
+def parse_config_file(file):
+    args = {}
+
+    # Open the JSON file
+    with open(file, "r") as f:
+        json_string = f.read()
+
+    # Deserialize the JSON string to a dictionary
+    args = json.loads(json_string)
+    return args
 # def test_model(model_pt, data_mrc):
 #
 #     # Load the PyTorch model file

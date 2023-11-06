@@ -1,20 +1,15 @@
 import debug
-import yaml
 
 # Plot losses comparison test
-loss_names = ["loss", "loss_data", "loss_ent", "loss_prior"]
-comparison_params = ["num_imgs", "latent_dim", "sigma", "latent_type"]
-comparison_details_dict = {
-    "num_imgs": ['5', '35', '75', '150'],
-    "latent_dim": ['8', '40', '150'],
-    "sigma": ['0.5', '1.0', '2.0'],
-    "latent_type": ['gmm', 'gmm_custom', 'gmm_eye']
-}
+
+debug_json_config_path = "debug_config.json"
+args = debug.parse_config_file(debug_json_config_path)
+
 # Compare
-for comparison_param in comparison_params:
-    comparison_details = comparison_details_dict[comparison_param]
+for comparison_param in args["comparison_params"]:
+    comparison_details = args["comparison_details_dict"][comparison_param]
     output_folder = "../results_batched/comparison"
-    for loss_name in loss_names:
+    for loss_name in args["loss_names"]:
 
         output_file = f"{loss_name}_comparison_{comparison_param}"
         folders = debug.get_folders_list(comparison_param, comparison_details)
