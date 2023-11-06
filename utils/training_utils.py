@@ -538,8 +538,8 @@ def train_latent_gmm_and_generator(models,
                                           use_envelope=use_envelope)
 
                 if normalize_loss:
-                    loss_prior = torch.divide(loss_prior, latent_dim)
-                    loss_data = torch.divide(loss_data,image_size * image_size)
+                    #loss_prior = torch.divide(loss_prior, latent_dim)
+                    loss_data = torch.divide(loss_data, image_size * image_size)
                 if 'closure-phase' in task:
                     loss_data, loss_mag, loss_phase = loss_data
 
