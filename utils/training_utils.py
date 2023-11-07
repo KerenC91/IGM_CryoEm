@@ -586,7 +586,10 @@ def train_latent_gmm_and_generator(models,
         if centroid_params:
             loss_centroid_list.append(loss_centroid_sum.item())
         if no_entropy == False:
-            loss_ent_list.append(loss_ent_sum.item())
+            if normalize_loss:
+                loss_ent_list.append(loss_ent_sum.item() / num_imgs)
+            else:
+                loss_ent_list.append(loss_ent_sum.item())
         else:
             loss_ent_list.append(loss_ent_sum)
         if k % 50 == 0:
