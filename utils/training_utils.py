@@ -10,6 +10,7 @@ import matplotlib
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 from torch.autograd import Variable
 import os
+from torch.utils.data import DataLoader
 
 kwargs = {'num_workers': 1, 'pin_memory': True} if device == 'cuda' else {}
 
@@ -24,6 +25,7 @@ from torch.utils.data import WeightedRandomSampler
 from .data_utils import get_envelope
 from .eht_utils import loss_angle_diff
 from .vis_utils import latest_epoch_path
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 class GMM_Custom(torch.distributions.MultivariateNormal):
     def __init__(self, mu, L, eps, device, latent_dim, **kwargs):
@@ -228,7 +230,34 @@ def get_loc_shift_mats(s, d, etype='sq', r=3, all_locs=False):
     envelope = get_envelope(image_size=s, etype=etype, ds1=d, ds2=d+r)
     return filters, envelope
 
+class TrainerArgs():
+    def __init__(self, gpu_id, model, train_data, save_every, epochs_run, snapshot_path):
+        self.gpu_id = gpu_id
+        self.model = model
+        self.train_data = train_data
+        self.save_every = save_every
+        self.epochs_run = epochs_run
+        self.snapshot_path = snapshot_path
+    
 
+def init_trainer(
+    model: torch.nn.Module,
+    train_data: DataLoader,
+    # optimizer: torch.optim.Optimizer,
+    save_every: int,
+    snapshot_path: str,
+) -> None:
+    gpu_id = 0#int(os.environ["LOCAL_RANK"])
+    model = model.to(gpu_id)
+    #optimizer = optimizer
+    epochs_run = 0
+    if os.path.exists(snapshot_path):
+        print("Loading snapshot")
+        load_snapshot(snapshot_path)
+
+    #model = DDP(model, device_ids=[gpu_id])
+    return TrainerArgs(gpu_id, model, train_data, save_every, epochs_run, snapshot_path)
+       
 def train_latent_gmm_and_generator(models,
                                    generator,
                                    generator_func,
@@ -267,7 +296,8 @@ def train_latent_gmm_and_generator(models,
                                    locshift_params=False,
                                    from_checkpoint=False,
                                    validate_args=False,
-                                   normalize_loss=False):
+                                   normalize_loss=False,
+                                   trainer_args = []):
     # Initialize training params (+ load from checkpoint if specified)
 
     start_epoch = 0
@@ -358,7 +388,7 @@ def train_latent_gmm_and_generator(models,
         prob_locations = None
 
     # Training loop
-    for k in range(start_epoch, num_epochs):
+    for k in range(trainer_args.epochs_run, num_epochs):
         loss_sum = 0
         loss_data_sum = 0
         loss_prior_sum = 0
@@ -479,18 +509,29 @@ def train_latent_gmm_and_generator(models,
             if batchGD == True:
                 loss_sum.backward(retain_graph = True)
                 optimizer.step()
-        else:    
-            for i in range(num_imgs):
+        else:  
+            b_sz = len(next(iter(trainer_args.train_data))[0])
+            print(f"[GPU{trainer_args.gpu_id}] Epoch {k} | Batchsize: {b_sz} | Steps: {len(trainer_args.train_data)}")
+            #trainer_args.train_data.sampler.set_epoch(k)
+            i = 0
+            for models, targets in trainer_args.train_data:
+                models = models.to(device)
+                #mu = mu.to(device)#(trainer_args.gpu_id)
+                #L = L.to(device)#(trainer_args.gpu_id)
+                targets = targets.to(device)
                 if batchGD == False:
                     optimizer.zero_grad()
-                target = targets[i]
+                target = targets[0]
+                model = models[0]
                 
 #                 mu, L = models[i]
 #                 spread_cov = (L@(L.t())).to(device) + torch.diag(torch.ones(latent_dim)).to(device)*(GMM_EPS)
 #                 prior = torch.distributions.MultivariateNormal(mu, spread_cov)
                 
                 if (latent_model == 'gmm') or (latent_model == "gmm_eye"):
-                    mu, L = models[i]
+                    mu, L = torch.split(model, [1, latent_dim], dim=0)
+                    mu = mu.squeeze(0)
+                    print(f'mu.shape={mu.shape}, L shape={L.shape}')
                     spread_cov = (L@(L.t())).to(device) + torch.diag(torch.ones(latent_dim)).to(device)*(GMM_EPS)
                     prior = torch.distributions.MultivariateNormal(mu, spread_cov, validate_args=validate_args)
                 elif (latent_model == 'gmm_low') or (latent_model == "gmm_low_eye"):
@@ -566,6 +607,7 @@ def train_latent_gmm_and_generator(models,
                 if batchGD == False:    
                     loss.backward(retain_graph = True)
                     optimizer.step()
+                i += 1
             if batchGD == True:
                 loss_sum.backward(retain_graph = True)
                 optimizer.step()   
@@ -687,8 +729,25 @@ def train_latent_gmm_and_generator(models,
 
                 save_model_gen_params(generator, models, optimizer, str(k), num_imgs, folder,
                                       sup_folder, latent_model)
-                
+        if trainer_args.gpu_id == 0 and k % trainer_args.save_every == 0:
+            save_snapshot(k)    
     return models, generator
+
+def save_snapshot(epoch, model, snapshot_path):
+    snapshot = {
+        "MODEL_STATE": model.module.state_dict(),
+        "EPOCHS_RUN": epoch,
+    }
+    torch.save(snapshot, snapshot_path)
+    print(f"Epoch {epoch} | Training snapshot saved at {snapshot_path}")
+
+
+def load_snapshot(trainer_args):
+    loc = f"cuda:{trainer_args.gpu_id}"
+    trainer_args.snapshot = torch.load(trainer_args.snapshot_path, map_location=loc)
+    trainer_args.model.load_state_dict(trainer_args.snapshot["MODEL_STATE"])
+    trainer_args.epochs_run = trainer_args.snapshot["EPOCHS_RUN"]
+    print(f"Resuming training from snapshot at Epoch {trainer_args.epochs_run}")
 
 def plot_results(models, generator, true_imgs, noisy_imgs, num_channels, 
                  image_size, num_imgs_show, num_imgs, 

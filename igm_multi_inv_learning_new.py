@@ -39,21 +39,51 @@ import generative_model.model_utils as model_utils
 import utils.training_utils as training_utils
 import utils.data_utils as data_utils
 import debug.debug as debug
+import torch.distributed as dist
+from torch.utils.data import TensorDataset
 
 # from sys import exit
 #import matplotlib.pyplot as plt
 #from torch.nn import functional as F
 import random
 import argparse
+from torch.utils.data.distributed import DistributedSampler
+from torch.distributed import init_process_group, destroy_process_group
+from torch.utils.data import Dataset, DataLoader
+import torch.optim as optim
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3"
-torch.cuda.set_device(2)
+#os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3"
+#torch.cuda.set_device(2)
 torch.cuda.empty_cache()
 
-DEBUG = False
+
+DEBUG = True
+
+class MyDataset(Dataset):
+    
+    def __init__(self, tensor_list, noisy_targets):
+        self.tensor_list = tensor_list
+        self.noisy_targets = noisy_targets
+
+    def __len__(self):
+        return len(self.tensor_list)
+
+    def __getitem__(self, idx):
+        mu = self.tensor_list[idx][0].unsqueeze(0) #torch.Size([1, 40])
+        L = self.tensor_list[idx][1] #torch.Size([40, 40])
+        target = self.noisy_targets[idx]
+        return torch.cat([mu, L], dim=0), target
+
+def ddp_setup():
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "12355"
+    init_process_group(backend="nccl", rank=0, world_size=4)
+    torch.cuda.set_device(0)
+    #torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
 
 def main_function(args):
 
+    #ddp_setup()
     # Get noisy + true data
     if 'multi' in args.task and 'compressed-sensing' in args.task:
         sigmas = [args.sigma_den, args.sigma_cs]
@@ -63,7 +93,7 @@ def main_function(args):
         sigmas = [args.sigma, args.sigma_cp]
     else:
         sigmas = args.sigma
-    # print("noise level(s): {0}".format(sigmas))
+     
     true, noisy, A, sigma, kernels = data_utils.get_true_and_noisy_data(image_size=args.image_size,
                                  sigma=sigmas,
                                  num_imgs_total=args.num_imgs,
@@ -84,7 +114,23 @@ def main_function(args):
 
     # Get latent GMM model
     models = model_utils.get_latent_model(args.latent_dim, args.num_imgs, args.latent_type)
+    #I have to convert models to be a Dataset, as in from torch.utils.data import Dataset
+    train_data = DataLoader(
+        MyDataset(models, noisy), # training_data
+        batch_size=1,#args.num_imgs,
+        pin_memory=False,
+        shuffle=False)#,
+        #sampler=DistributedSampler(models)
+    #)
+    for mu, L in train_data: 
+        mu = mu.to(device)
+        L = L.to(device)
+        print(f"{mu.shape}, {L.shape}")
 
+    trainer_args = training_utils.init_trainer(model=generator,
+                                               train_data=train_data,
+                                               save_every=args.save_every,
+                                               snapshot_path="snapshot.pt")
     # Learn the IGM
     models, generator = training_utils.train_latent_gmm_and_generator(models=models,
                                           generator=generator,
@@ -124,7 +170,9 @@ def main_function(args):
                                           locshift_params=args.locshift,
                                           from_checkpoint=args.from_checkpoint,
                                           validate_args=args.validate_args,
-                                          normalize_loss=args.normalize_loss)
+                                          normalize_loss=args.normalize_loss,
+                                          trainer_args=trainer_args)
+    destroy_process_group()
 
 
 
@@ -132,7 +180,6 @@ def main_function(args):
 if __name__ == "__main__":
 
     ################################################## SETUP ARGUMENTS ########################################################
-    matplotlib.use('Qt5Agg')
 
     parser = argparse.ArgumentParser(description='Learning the IGM')
 
@@ -245,7 +292,10 @@ if __name__ == "__main__":
     parser.add_argument('--rand_shift', action='store_true', default=False,
                         help='perform shifts on a single image, perform learning o those augmentations'
                              '(default: False)')
-    
+    #parser.add_argument('--total_epochs', type=int, help='Total epochs to train the model')
+    parser.add_argument('--save_every', type=int, help='How often to save a snapshot')
+    #parser.add_argument('--batch_size', default=32, type=int, help='Input batch size on each device (default: 32)')
+
     args = parser.parse_args()
     ## debugging args - Keren
     if DEBUG is True:
@@ -343,5 +393,5 @@ if __name__ == "__main__":
         args.sigma = []
         for i in range(args.num_imgs):
             args.sigma.append(torch.tensor(sigma['arr_0'][i][np.newaxis, :, np.newaxis]).to(device))
-   
+
     main_function(args)
