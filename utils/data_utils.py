@@ -21,18 +21,20 @@ from torch.utils.data import Dataset
 import aspire
 # os.environ['CUDA_VISIBLE_DEVICES'] = "1"
 seed = 100
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = int(os.environ["LOCAL_RANK"])
+
+#device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 from torch.autograd import Variable
 
-GPU = torch.cuda.is_available()
-if GPU == True:
-    torch.backends.cudnn.enabled = True
-    torch.backends.cudnn.benchmark = True
-    dtype = torch.cuda.FloatTensor
-    print("num GPUs",torch.cuda.device_count())
-else:
-    dtype = torch.FloatTensor
-
+# GPU = torch.cuda.is_available()
+# if GPU == True:
+#     torch.backends.cudnn.enabled = True
+#     torch.backends.cudnn.benchmark = True
+#     dtype = torch.cuda.FloatTensor
+#     print("num GPUs",torch.cuda.device_count())
+# else:
+#     dtype = torch.FloatTensor
+dtype = torch.FloatTensor
 
 torch.set_default_dtype(torch.float32)
 import torch.optim as optim
@@ -44,7 +46,7 @@ import random
 from .eht_utils import empty_eht_obs, eht_observation_pytorch, Obs_params_torch
 from .vis_utils import true_image_path, true_obs_list, obs_params, object_from_dataset
 
-kwargs = {'num_workers': 1, 'pin_memory': True} if device == 'cuda' else {}
+kwargs = {}#{'num_workers': 1, 'pin_memory': True} if device == 'cuda' else {}
 
 ## Create a custom Dataset class
 class CelebADataset(Dataset):
@@ -356,8 +358,8 @@ def get_true_and_noisy_data(image_size,
                             envelope_params=None,
                             rand_shift=False):
     ######### GET DATA ################
-    kwargs = {'num_workers': 1, 'pin_memory': True} if device == 'cuda' else {}
-
+    kwargs = {}#{'num_workers': 1, 'pin_memory': True} if device == 'cuda' else {}
+    
     # Get noisy imgs
     noisy_imgs = []
     bad = np.array([2,3,35,38,40,48,58,59,60,69]) # for 100
@@ -399,7 +401,7 @@ def get_true_and_noisy_data(image_size,
             num_examples = 1
             list_of_transforms = transforms.Compose([transforms.ToTensor(), 
                                                      transforms.Resize(size=(image_size,image_size))])            
-            kwargs = {'num_workers': 1, 'pin_memory': True} if device == 'cuda' else {}
+            kwargs = {}#{'num_workers': 1, 'pin_memory': True} if device == 'cuda' else {}
 
             for i in range(10):
                 test_data_i = datasets.MNIST('./data', train=False, download=True,
@@ -446,34 +448,27 @@ def get_true_and_noisy_data(image_size,
         true_image_norm = 1 / (x - x.min()).max()
         x_01 = (x - x.min())/(x - x.min()).max()
         test_imgs = TensorDataset(Tensor(x_01),torch.ones([x.shape[0],1]))
-    elif dataset == "cryo_empiar10028":
+    elif dataset == "cryo":#empiar10028
+        test_imgs = [] #make it with lots of attributes such as in MNIST!!!
         data_path = '/home/kerencohen2/Git/IGM_CryoEm/data/particles/MRC_0601/10028/data/Particles/MRC_0601'
         if objective == 'learning':
             list_of_transforms = transforms.Compose([transforms.ToTensor(), 
                                                     transforms.Resize(size=(image_size,image_size))])
             # Check if the dataset exists in the specified directory
-            if not os.path.exists('./data/cryo_empiar10028'):
+            if not os.path.exists(data_path):
                 raise ValueError('dataset cryo_empiar10028 invalid')
             
             # load the dataset
-            test_imgs = []
-            for i in range(5):
-                test_imgs[i] = aspire.image.load_mrc(f'./data/cryo_empiar10028/00{i}_particles_shiny_nb50_new.mrcs')
-            test_imgs[0] = aspire.image.load_mrc('./data/cryo_empiar10028/001_particles_shiny_nb50_new.mrcs')
-            test_imgs[1] = aspire.image.load_mrc('./data/cryo_empiar10028/001_particles_shiny_nb50_new.mrcs')
-            test_imgs[2] = aspire.image.load_mrc('./data/cryo_empiar10028/001_particles_shiny_nb50_new.mrcs')
-            test_imgs[3] = aspire.image.load_mrc('./data/cryo_empiar10028/001_particles_shiny_nb50_new.mrcs')
-            test_imgs[4] = aspire.image.load_mrc('./data/cryo_empiar10028/001_particles_shiny_nb50_new.mrcs')
+            im_path = os.path.join(data_path, '001_particles_shiny_nb50_new.mrcs')
+            test_imgs.data[0] = aspire.image.load_mrc(im_path)
+            test_imgs.data[0] = torch.from_numpy(test_imgs.data[0])
+            src = test_imgs.data[0]
+            for i in range(1, num_imgs_total):
+                shift_x = random.randint(-image_size / 4, image_size / 4)
+                shift_y = random.randint(-image_size / 4, image_size / 4)
+                test_imgs.data[i] = torch.roll(src, (shift_y, shift_x), dims=(0, 1))
 
-            
-            #Adding transformers
-      
-            if class_idx is not None:
-                idx = test_imgs.targets==class_idx
-                test_imgs.targets = test_imgs.targets[idx]
-                test_imgs.data = test_imgs.data[idx]    
 
-            test_imgs.data = test_imgs.data[:num_imgs_total]
     else:
         raise ValueError('invalid dataset')
 

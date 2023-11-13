@@ -13,7 +13,8 @@ from matplotlib import gridspec
 
 import numpy as np
 import copy
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+import os
+device = int(os.environ["LOCAL_DATA"])#= torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 from torch.autograd import Variable
 from . import flow_def
 from . import training_utils
@@ -29,15 +30,15 @@ from torch import Tensor
 import matplotlib.pyplot as plt
 from torch.nn import functional as F
 
-GPU = torch.cuda.is_available()
-if GPU == True:
-    torch.backends.cudnn.enabled = True
-    torch.backends.cudnn.benchmark = True
-    dtype = torch.cuda.FloatTensor
-    print("num GPUs",torch.cuda.device_count())
-else:
-    dtype = torch.FloatTensor
-
+# GPU = torch.cuda.is_available()
+# if GPU == True:
+#     torch.backends.cudnn.enabled = True
+#     torch.backends.cudnn.benchmark = True
+#     dtype = torch.cuda.FloatTensor
+#     print("num GPUs",torch.cuda.device_count())
+# else:
+#     dtype = torch.FloatTensor
+dtype = torch.FloatTensor
 #def torch_forward_model(x, F, task):
 #    if task == 'denoising':
 #        return x

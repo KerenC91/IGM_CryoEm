@@ -25,7 +25,7 @@ import torch
 #import matplotlib
 #from torch.autograd import Variable
 
-torch.set_default_dtype(torch.float32)
+#torch.set_default_dtype(torch.float32)
 #import torch.optim as optim
 #import pickle
 #import math
@@ -54,10 +54,10 @@ import torch.optim as optim
 
 #os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3"
 #torch.cuda.set_device(2)
-torch.cuda.empty_cache()
+#torch.cuda.empty_cache()
 
 
-DEBUG = True
+DEBUG = False
 
 class MyDataset(Dataset):
     
@@ -72,18 +72,22 @@ class MyDataset(Dataset):
         mu = self.tensor_list[idx][0].unsqueeze(0) #torch.Size([1, 40])
         L = self.tensor_list[idx][1] #torch.Size([40, 40])
         target = self.noisy_targets[idx]
+        
+        mu = mu.to('cpu')
+        L = L.to('cpu')
+        target = target.to('cpu')
         return torch.cat([mu, L], dim=0), target
 
 def ddp_setup():
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "12355"
-    init_process_group(backend="nccl", rank=0, world_size=4)
-    torch.cuda.set_device(0)
-    #torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+    #os.environ["MASTER_ADDR"] = "localhost"
+    #os.environ["MASTER_PORT"] = "12355"
+    init_process_group(backend="nccl")#, rank=0, world_size=4)
+    #torch.cuda.set_device(0)
+    torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
 
 def main_function(args):
 
-    #ddp_setup()
+    ddp_setup()
     # Get noisy + true data
     if 'multi' in args.task and 'compressed-sensing' in args.task:
         sigmas = [args.sigma_den, args.sigma_cs]
@@ -115,22 +119,23 @@ def main_function(args):
     # Get latent GMM model
     models = model_utils.get_latent_model(args.latent_dim, args.num_imgs, args.latent_type)
     #I have to convert models to be a Dataset, as in from torch.utils.data import Dataset
+    dataset = MyDataset(models, noisy)
     train_data = DataLoader(
-        MyDataset(models, noisy), # training_data
+        dataset, # training_data
         batch_size=1,#args.num_imgs,
-        pin_memory=False,
-        shuffle=False)#,
-        #sampler=DistributedSampler(models)
-    #)
-    for mu, L in train_data: 
-        mu = mu.to(device)
-        L = L.to(device)
-        print(f"{mu.shape}, {L.shape}")
+        pin_memory=True,
+        shuffle=False,
+        sampler=DistributedSampler(dataset)
+    )
+    # for mu, L in train_data: 
+    #     mu = mu.to(device)
+    #     L = L.to(device)
+    #     print(f"{mu.shape}, {L.shape}")
 
     trainer_args = training_utils.init_trainer(model=generator,
                                                train_data=train_data,
                                                save_every=args.save_every,
-                                               snapshot_path="snapshot.pt")
+                                               snapshot_path=f'./{args.sup_folder}/{args.folder}/snapshot.pt')
     # Learn the IGM
     models, generator = training_utils.train_latent_gmm_and_generator(models=models,
                                           generator=generator,
@@ -301,21 +306,26 @@ if __name__ == "__main__":
     if DEBUG is True:
         debug.set_args(args)
     ## debugging end
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    #device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = int(os.environ["LOCAL_RANK"])
+    #device = 'cpu'
+    
+    #torch.manual_seed(args.seed)
+    #torch.cuda.manual_seed(args.seed)
+    #np.random.seed(args.seed)
+    #random.seed(args.seed)
 
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed(args.seed)
-    np.random.seed(args.seed)
-    random.seed(args.seed)
-
-    GPU = torch.cuda.is_available()
-    if GPU == True:
-        torch.backends.cudnn.enabled = True
-        torch.backends.cudnn.benchmark = True
-        dtype = torch.cuda.FloatTensor
-        print("num GPUs",torch.cuda.device_count())
-    else:
-        dtype = torch.FloatTensor
+    #GPU = torch.cuda.is_available()
+    #if GPU == True:
+        #torch.backends.cudnn.enabled = True
+        #torch.backends.cudnn.benchmark = True
+        #dtype = torch.cuda.FloatTensor
+    #    dtype = torch.FloatTensor
+    #    print("num GPUs",torch.cuda.device_count())
+    #else:
+    #    dtype = torch.FloatTensor
+    dtype = torch.FloatTensor
+    
     import os,sys,inspect
     currentdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
     parentdir = os.path.dirname(currentdir)

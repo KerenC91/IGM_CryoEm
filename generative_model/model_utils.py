@@ -4,18 +4,20 @@ from . import stylegan_networks
 from . import deep_decoder
 from . import realnvpfc_model_batch    
 from . import vae
-
+import os
 import math
+device = int(os.environ["LOCAL_RANK"])
 
-GPU = torch.cuda.is_available()
-if GPU == True:
-    torch.backends.cudnn.enabled = True
-    torch.backends.cudnn.benchmark = True
-    dtype = torch.cuda.FloatTensor
-    print("num GPUs",torch.cuda.device_count())
-else:
-    dtype = torch.FloatTensor
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+# GPU = torch.cuda.is_available()
+# if GPU == True:
+#     torch.backends.cudnn.enabled = True
+#     torch.backends.cudnn.benchmark = True
+#     dtype = torch.cuda.FloatTensor
+#     print("num GPUs",torch.cuda.device_count())
+# else:
+#    dtype = torch.FloatTensor
+dtype = torch.FloatTensor
+#device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def count_params(net):
     s = sum([np.prod(list(p.size())) for p in net.parameters()]);
@@ -50,7 +52,8 @@ def get_conv_decoder(image_size, latent_dim, dropout_val, layer_size,
                             filter_size=3,
                             upsample_mode='nearest',
                             **kwargs)
-
+import os
+device = int(os.environ["LOCAL_RANK"])
 
 def get_generator(latent_dim, image_size, generator_type):
     if generator_type == 'stylegan':
@@ -64,6 +67,7 @@ def get_generator(latent_dim, image_size, generator_type):
         layer_size = 150
         num_layer_decoder = 6
         generator = get_deep_decoder(image_size, latent_dim, dropout_val, layer_size, num_layer_decoder)
+        #generator = generator.to(device)
         G = lambda z: generator(z)
         return generator, G
     elif generator_type == 'convdecoder':
