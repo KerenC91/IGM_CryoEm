@@ -123,7 +123,7 @@ class Trainer:
     def _run_epoch(self, epoch):
         loss_sum = 0
         b_sz = len(next(iter(self.train_data))[0])
-        print(f"[GPU{self.gpu_id}] Epoch {epoch} | Batchsize: {b_sz} | Steps: {len(self.train_data)}")
+        #print(f"[GPU{self.gpu_id}] Epoch {epoch} | Batchsize: {b_sz} | Steps: {len(self.train_data)}")
         self.train_data.sampler.set_epoch(epoch)
         self.optimizer.zero_grad()
 
@@ -135,20 +135,18 @@ class Trainer:
             
             loss = self._run_batch(source, targets)   
             loss_sum += loss
-            print(f"[GPU{self.gpu_id}] Epoch {epoch} iter {i}| loss: {loss} loss_sum: {loss_sum}")
+            #print(f"[GPU{self.gpu_id}] Epoch {epoch} iter {i}| loss: {loss} loss_sum: {loss_sum}")
             i += 1
         loss_sum *= b_sz
         loss_sum.backward()
         self.optimizer.step()
-        # Normalize
-        #loss_sum /= len(self.train_data) * b_sz
         return loss_sum
 
     def _save_checkpoint(self, epoch):
         ckp = self.model.module.state_dict()
         PATH = f"./figures/checkpoint_{self.suffix}.pt"
         torch.save(ckp, PATH)
-        print(f"Epoch {epoch} | Training checkpoint saved at {PATH}")
+        #print(f"Epoch {epoch} | Training checkpoint saved at {PATH}")
 
     def train(self, max_epochs: int):
         loss_list = []
@@ -157,7 +155,7 @@ class Trainer:
             loss_sum = self._run_epoch(epoch)
             # Get loss from all processes
             all_reduce(loss_sum, op=dist.ReduceOp.SUM)
-            print(f"[GPU{self.gpu_id}] Epoch {epoch} | loss_sum: {loss_sum} after all_reduce")
+            #print(f"[GPU{self.gpu_id}] Epoch {epoch} | loss_sum: {loss_sum} after all_reduce")
 
             # Only gpu 0 operating now...
             if self.gpu_id == 0: 
@@ -168,7 +166,7 @@ class Trainer:
         # save data    
         if self.gpu_id == 0:
             b_sz = len(next(iter(self.train_data))[0])
-            print(f'#loss points {len(loss_list)}')
+            #print(f'#loss points {len(loss_list)}')
             np.save(f'./figures/loss_ddp_{self.num_imgs}im_{b_sz}bs_{max_epochs}epochs_{self.world_size}gpus_{self.suffix}.npy', loss_list)
             plt.figure()
             plt.plot(loss_list)
@@ -214,7 +212,14 @@ def main(rank: int, world_size: int, save_every: int, total_epochs: int, batch_s
     if trainer.gpu_id not in [-1, 0]:
         dist.barrier()
     # Only gpu 0 operating now...
-    if trainer.gpu_id == 0: 
+    if trainer.gpu_id == 0:
+        print(f"Running {os.path.basename(__file__)}"
+              f" with {world_size} gpus, "
+              f"{total_epochs} total epochs, "
+              f"{num_imgs} images, "
+              f"{batch_size} batch size, "
+              f"save checkpoint every {save_every} epochs")
+        
         start_time = time.time() 
         dist.barrier()
     
@@ -227,7 +232,7 @@ def main(rank: int, world_size: int, save_every: int, total_epochs: int, batch_s
     if trainer.gpu_id == 0:
         # Only gpu 0 operating now...
         end_time = time.time()  
-        print(f"gpu {trainer.gpu_id} Time taken to train in {os.path.basename(__file__)}: {end_time - start_time} seconds")
+        print(f"Time taken to train in {os.path.basename(__file__)}: {end_time - start_time} seconds")
         dist.barrier()
 
     destroy_process_group()
@@ -238,7 +243,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='simple distributed training job')
     parser.add_argument('--total_epochs', default=100, type=int, help='Total epochs to train the model (default: 100)')
     parser.add_argument('--save_every', default=30, type=int, help='How often to save a snapshot. (default: 30)')
-    parser.add_argument('--batch_size', default=1, type=int, help='Input batch size on each device (default: 1)')
+    parser.add_argument('--batch_size', default=None, type=int, help='Input batch size on each device (default: 1)')
     parser.add_argument('--num_imgs', default=5, type=int, help='Input batch size on each device (default: 5)')
     parser.add_argument('--suffix', default='', type=str, help='suffix, default is ''')
     parser.add_argument('--nproc', default=torch.cuda.device_count(), type=int, help='nproc, default is the number of available gpus on the machine')
@@ -248,4 +253,8 @@ if __name__ == "__main__":
     # rank is the device
     if args.nproc:
         world_size = args.nproc
+        
+    if args.batch_size is None:
+        args.batch_size = int(args.num_imgs / world_size)
+    # Otherwise value is set as the user provided
     mp.spawn(main, args=(world_size, args.save_every, args.total_epochs, args.batch_size, args.num_imgs, args.suffix), nprocs=world_size)

@@ -1,7 +1,6 @@
 import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
-from datautils import MyTrainDataset
 
 import torch.multiprocessing as mp
 from torch.utils.data.distributed import DistributedSampler
@@ -220,5 +219,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
     # load_checkpoints('./figures/checkpoint_ddp_24im_parallel_bs1_2gpu_norm_1epoch.pt',
     #                  './figures/checkpoint_24im_bs1_1epoch_unnorm.pt')
-    plot_all(folder='./figures/loss_norm_after_back')
+    plot_all(folder='./figures/1000epochs/4im')
     main(args.total_epochs, args.batch_size, args.num_imgs, args.suffix)
