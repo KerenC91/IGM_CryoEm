@@ -25,15 +25,6 @@ def ddp_setup(rank, world_size):
     torch.cuda.set_device(rank)
     
     
-def reduce_tensor(tensor):
-    rt = tensor.clone().detach()
-    dist.all_reduce(rt, op=dist.ReduceOp.SUM)
-    rt /= (
-        dist.get_world_size() if dist.is_initialized() else 1
-    )
-    return rt
-
-
 class NetBN(nn.Module):
     def __init__(self, gpu_id):
         super(NetBN, self).__init__()
@@ -249,10 +240,8 @@ if __name__ == "__main__":
     parser.add_argument('--nproc', default=torch.cuda.device_count(), type=int, help='nproc, default is the number of available gpus on the machine')
 
     args = parser.parse_args()
-    world_size = torch.cuda.device_count() # How many GPUs are availale on a machine
     # rank is the device
-    if args.nproc:
-        world_size = args.nproc
+    world_size = args.nproc
         
     if args.batch_size is None:
         args.batch_size = int(args.num_imgs / world_size)
