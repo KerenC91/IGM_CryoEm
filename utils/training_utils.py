@@ -13,6 +13,41 @@ from .eht_utils import loss_angle_diff
 from .vis_utils import latest_epoch_path
 from torch.nn.parallel import DistributedDataParallel as DDP
 
+
+def get_gmm_gen_params(models, generator, num_imgs, model_type, eps_fixed):
+    params = []
+    for kk in range(num_imgs):
+        if model_type != "gmm_low" and model_type != "gmm_low_eye":
+            mu, L = models[kk][0], models[kk][1]
+            mu = Variable(mu, requires_grad=True)
+            L = Variable(L, requires_grad=True)
+            models[kk][0] = mu
+            models[kk][1] = L
+            params += [models[kk][0]]
+            params += [models[kk][1]]
+        elif model_type == "gmm_low" or model_type == "gmm_low_eye":
+            if eps_fixed == True:
+                mu, L, eps = models[kk][0], models[kk][1], models[kk][2]
+                mu = Variable(mu, requires_grad=True)
+                L = Variable(L, requires_grad=True)
+                models[kk][0] = mu
+                models[kk][1] = L
+                models[kk][2] = eps
+                params += [models[kk][0]]
+                params += [models[kk][1]]
+            else:
+                mu, L, eps = models[kk][0], models[kk][1], models[kk][2]
+                mu = Variable(mu, requires_grad=True)
+                L = Variable(L, requires_grad=True)
+                eps = Variable(eps, requires_grad=True)
+                models[kk][0] = mu
+                models[kk][1] = L
+                models[kk][2] = eps
+                params += [models[kk][0]]
+                params += [models[kk][1]]
+                params += [models[kk][2]]
+    params += generator.parameters()
+    return params
 class GMM_Custom(torch.distributions.MultivariateNormal):
     def __init__(self, mu, L, eps, device, latent_dim, **kwargs):
         C = (L@(L.t())).to(device) + torch.diag(torch.ones(latent_dim)).to(device)*(eps)
@@ -35,6 +70,7 @@ class GMM_Custom(torch.distributions.MultivariateNormal):
         x = x.t() + self.loc.unsqueeze(0)
         return x
 
+
 class Trainer():
     def __init__(
             self,
@@ -43,32 +79,37 @@ class Trainer():
             optimizer,
             gpu_id,
             snapshot_path,
+            sigma,
+            targets,
+            true_imgs,
+            As,
+            models,
+            generator_func,
             args # org params before class
     ):
         self.gpu_id = gpu_id
         self.device = gpu_id # reduandant, remove later!
         self.generator = generator.to(gpu_id)
+        self.generator = DDP(generator, device_ids=[gpu_id])
         self.train_data = train_data
         self.optimizer = optimizer
         self.save_every = args.save_every
         self.num_imgs = args.num_imgs
         self.suffix = args.suffix
-        self.generator = DDP(generator, device_ids=[gpu_id])
         self.world_size = args.nproc
-        self.epochs_run = args.num_epochs
         self.snapshot_path = snapshot_path
         # org params before class
-        self.models = args.models
-        self.generator_func = args.generator_func
+        self.models = models
+        self.generator_func = generator_func
         self.generator_type = args.generator_type
         self.lr = args.lr
-        self.sigma = args.sigma
-        self.targets = args.targets
-        self.true_imgs = args.true_imgs
+        self.sigma = sigma
+        self.targets = targets
+        self.true_imgs = true_imgs
         self.num_samples = args.num_samples
         self.num_imgs_show = args.num_imgs_show
         self.num_epochs = args.num_epochs
-        self.As = args.As
+        self.As = As
         self.task = args.task
         self.save_img = args.save_img
         self.dropout_val = args.dropout_val
@@ -81,78 +122,42 @@ class Trainer():
         self.GMM_EPS = args.GMM_EPS
         self.sup_folder = args.sup_folder
         self.folder = args.folder
-        self.latent_model = args.latent_model
+        self.latent_model = args.latent_type
         self.image_size = args.image_size
         self.num_channels = args.num_channels
         self.no_entropy = args.no_entropy
         self.eps_fixed = args.eps_fixed
-        self.gamma = None
-        self.cphase_anneal = None
-        self.cphase_scale = 1
-        self.envelope_params = None
-        self.centroid_params = None
-        self.locshift_params = False
-        self.from_checkpoint = False
-        self.validate_args = False
-        self.normalize_loss = False
-        if os.path.exists(snapshot_path):
-            print("Loading snapshot")
-            model, epochs_run = self.load_snapshot(snapshot_path, gpu_id, generator)
+        self.latent_dim = args.latent_dim
+        self.epochs_run = 0
+        self.gamma = args.gamma
+        self.cphase_anneal = args.cphase_anneal         # None
+        self.cphase_scale = args.cphase_scale           # None
+        self.envelope_params = args.envelope            # 1
+        self.centroid_params = args.centroid            # None
+        self.locshift_params = args.locshift            # None
+        self.from_checkpoint = args.from_checkpoint     # False
+        self.validate_args = args.validate_args         # False
+        self.normalize_loss = args.normalize_loss       # False
         torch.set_default_dtype(torch.float32)
 
-    def get_latent_model(self, latent_dim):
-        list_of_models = [[torch.randn((latent_dim,)).to(self.device),
-                           torch.tril(torch.ones((latent_dim, latent_dim))).to(self.device)] for i in range(self.num_imgs)]
+    def get_latent_model(self):
+        list_of_models = [[torch.randn((self.latent_dim,)).to(self.device),
+                           torch.tril(torch.ones((self.latent_dim, self.latent_dim))).to(self.device)] for i in range(self.num_imgs)]
         return list_of_models
-
-    def get_gmm_gen_params(self):
-        params = []
-        for kk in range(self.num_imgs):
-            if self.model_type != "gmm_low" and self.model_type != "gmm_low_eye":
-                mu, L = self.models[kk][0], self.models[kk][1]
-                mu = Variable(mu, requires_grad=True)
-                L = Variable(L, requires_grad=True)
-                self.models[kk][0] = mu
-                self.models[kk][1] = L
-                params += [self.models[kk][0]]
-                params += [self.models[kk][1]]
-            elif self.model_type == "gmm_low" or self.model_type == "gmm_low_eye":
-                if self.eps_fixed == True:
-                    mu, L, eps = self.models[kk][0], self.models[kk][1], self.models[kk][2]
-                    mu = Variable(mu, requires_grad=True)
-                    L = Variable(L, requires_grad=True)
-                    self.models[kk][0] = mu
-                    self.models[kk][1] = L
-                    self.models[kk][2] = eps
-                    params += [self.models[kk][0]]
-                    params += [self.models[kk][1]]
-                else:
-                    mu, L, eps = self.models[kk][0], self.models[kk][1], self.models[kk][2]
-                    mu = Variable(mu, requires_grad=True)
-                    L = Variable(L, requires_grad=True)
-                    eps = Variable(eps, requires_grad=True)
-                    self.models[kk][0] = mu
-                    self.models[kk][1] = L
-                    self.models[kk][2] = eps
-                    params += [self.models[kk][0]]
-                    params += [self.models[kk][1]]
-                    params += [self.models[kk][2]]
-        params += self.generator.parameters()
-        return params
 
     def get_avg_std_img(self, model, latent_dim):
         nimg = 40
-        #     if self.latent_type == 'flow':
+        #     if self.latent_model == 'flow':
 
-        if (self.latent_type == 'gmm') or (self.latent_type == "gmm_eye"):
+        if (self.latent_model == 'gmm') or (self.latent_model == "gmm_eye"):
             prior = torch.distributions.MultivariateNormal(model[0],
                                                            (self.GMM_EPS) * torch.eye(latent_dim).to(self.device) + model[1] @ (
                                                                model[1].t()))
             z_sample = prior.sample((nimg,)).to(self.device)
-        elif (self.latent_type == 'gmm_low') or (self.latent_type == "gmm_low_eye"):
+        elif (self.latent_model == 'gmm_low') or (self.latent_model == "gmm_low_eye"):
             prior = torch.distributions.LowRankMultivariateNormal(model[0], model[1], model[2] * model[2] + 1e-6)
             z_sample = prior.sample((nimg,)).to(self.device)
-        elif (self.latent_type == "gmm_custom"):
+        elif (self.latent_model == "gmm_custom"):
             prior = GMM_Custom(model[0], model[1], self.GMM_EPS, self.device, latent_dim)
             # (self.GMM_EPS)*torch.eye(latent_dim).to(self.device)+model[1]@(model[1].t()))
             z_sample = prior.sample((nimg,)).to(self.device)
@@ -280,13 +285,6 @@ class Trainer():
         envelope = get_envelope(image_size=s, etype=etype, ds1=d, ds2=d + r)
         return filters, envelope
 
-
-    def _run_batch(self, source, targets):
-        pass
-
-    def _run_epoch(self, epoch):
-        pass
-
     def _save_checkpoint(self, epoch):
         ckp = self.model.module.state_dict()
         PATH = f"./figures/checkpoint_{self.suffix}.pt"
@@ -309,24 +307,22 @@ class Trainer():
             last_generator_path = latest_epoch_path(checkpoints_path, pattern=pattern)
 
             pattern_begin, pattern_end = pattern.split('*')
-            start_epoch = int(os.path.split(last_generator_path)[-1][len(pattern_begin):-len(pattern_end)])
+            self.epochs_run = int(os.path.split(last_generator_path)[-1][len(pattern_begin):-len(pattern_end)])
 
             last_generator_sd = torch.load(last_generator_path)
             last_optimizer_sd = torch.load(last_generator_path.replace('cotrain-generator', 'optimizer'))
             self.generator.load_state_dict(last_generator_sd)
 
-            models = []
+            self.models = []
             for i in range(self.num_imgs):
                 latent_model_path = os.path.join(checkpoints_path, f'gmm-{i}.npz')
                 latent_model_ = np.load(latent_model_path)
-                models.append([Tensor(latent_model_[f]).to(self.device) for f in latent_model_.files])
+                self.models.append([Tensor(latent_model_[f]).to(self.device) for f in latent_model_.files])
 
-        params = self.get_gmm_gen_params(models, self.generator, self.num_imgs, self.latent_model, self.eps_fixed)
-        optimizer = optim.Adam(params, lr=self.lr)
-        if self.from_checkpoint:
-            optimizer.load_state_dict(last_optimizer_sd)
+            params = self.get_gmm_gen_params(self.models, self.generator, self.num_imgs, self.latent_model, self.eps_fixed)
+            self.optimizer = optim.Adam(params, lr=self.lr)
+            self.optimizer.load_state_dict(last_optimizer_sd)
 
-        if self.from_checkpoint:
             for (loss_checkpt_file, loss_checkpt_list) in [
                 ('loss.npy', loss_list),
                 ('loss_data.npy', loss_data_list),
@@ -375,9 +371,10 @@ class Trainer():
         if learn_locshift:
             prob_locations = (1 / self.image_size) ** 2 * torch.ones(self.image_size * self.image_size)
             prob_locations = Variable(prob_locations, requires_grad=True)
-            params.append(prob_locations)
+            params.append(prob_locations) # seems like a bug, since unused
         else:
             prob_locations = None
+        return loss_centroid_fit, phase_anneal, centroid_anneal, centroid_loss_wt, loc_shift, learn_locshift, prob_locations, use_envelope
 
     def run_epoch_multi(self,
                     loss_sum,
@@ -500,13 +497,8 @@ class Trainer():
 
     def run_epoch_other(self,
                     k,
-                    loss_sum,
-                    loss_data_sum,
-                    loss_prior_sum,
-                    loss_ent_sum,
-                    loss_mag_sum,
-                    loss_phase_sum,
-                    loss_centroid_sum):
+                    loss_sum, loss_data_sum, loss_prior_sum, loss_ent_sum, loss_mag_sum, loss_phase_sum, loss_centroid_sum,
+                    loss_centroid_fit, phase_anneal, centroid_anneal, centroid_loss_wt, loc_shift, learn_locshift, prob_locations, use_envelope):
         if k % 50 == 0:
             b_sz = len(next(iter(self.train_data))[0])
             print(f"[GPU{self.gpu_id}] Epoch {k} | Batchsize: {b_sz} | Steps: {len(self.train_data)}")
@@ -559,10 +551,10 @@ class Trainer():
 
             loss_prior = 0.5 * torch.sum(z_sample ** 2, 1)
 
-            if self.loc_shift is not None:
-                filters, envelope = self.loc_shift
-                if self.learn_locshift:
-                    samples = WeightedRandomSampler(self.prob_locations, img.shape[0], replacement=True)
+            if loc_shift is not None:
+                filters, envelope = loc_shift
+                if learn_locshift:
+                    samples = WeightedRandomSampler(prob_locations, img.shape[0], replacement=True)
                     samples = list(samples)
                     filters = filters[samples]
 
@@ -571,8 +563,8 @@ class Trainer():
                                         padding='same', groups=filters.shape[0]).transpose(0, 1)
 
             loss_data = self.loss_data_fit(img, target, self.sigma, self.As, self.task, idx=i, dataset=self.dataset,
-                                      gamma=self.gamma, cp_scale=self.cphase_scale * self.phase_anneal[k],
-                                      use_envelope=self.use_envelope)
+                                      gamma=self.gamma, cp_scale=self.cphase_scale * phase_anneal[k],
+                                      use_envelope=use_envelope)
 
             # if normalize_loss:
             # loss_prior = torch.divide(loss_prior, latent_dim)
@@ -582,7 +574,7 @@ class Trainer():
                 loss_data, loss_mag, loss_phase = loss_data
 
             if self.centroid_params:
-                loss_centroid = self.centroid_anneal[k] * self.centroid_loss_wt * self.loss_centroid_fit(img)
+                loss_centroid = centroid_anneal[k] * centroid_loss_wt * loss_centroid_fit(img)
                 loss = torch.mean(loss_data + log_ent + loss_prior + loss_centroid)
             else:
                 loss = torch.mean(loss_data + log_ent + loss_prior)
@@ -613,14 +605,15 @@ class Trainer():
                 loss_centroid_sum
 
     def run_epoch(self,
-                    k,
-                    loss_sum,
-                    loss_data_sum,
-                    loss_prior_sum,
-                    loss_ent_sum,
-                    loss_mag_sum,
-                    loss_phase_sum,
-                    loss_centroid_sum):
+                  k,
+                  loss_centroid_fit,
+                  phase_anneal,
+                  centroid_anneal,
+                  centroid_loss_wt,
+                  loc_shift,
+                  learn_locshift,
+                  prob_locations,
+                  use_envelope):
         loss_sum = 0
         loss_data_sum = 0
         loss_prior_sum = 0
@@ -633,14 +626,15 @@ class Trainer():
         self.train_data.sampler.set_epoch(k)
         self.optimizer.zero_grad()
         if 'multi' in self.task:
+            # Maybe wrong inside, don't really care
             loss_sum, loss_data_sum, loss_prior_sum, loss_ent_sum \
                 = self.run_epoch_multi(loss_sum,
                                    loss_data_sum,
                                    loss_prior_sum,
                                    loss_ent_sum)
         else:
-            loss_sum, loss_data_sum, loss_prior_sum,
-            loss_ent_sum, loss_mag_sum, loss_phase_sum,
+            loss_sum, loss_data_sum, loss_prior_sum,\
+            loss_ent_sum, loss_mag_sum, loss_phase_sum,\
             loss_centroid_sum = self.run_epoch_other(k,
                                                  loss_sum,
                                                  loss_data_sum,
@@ -648,16 +642,16 @@ class Trainer():
                                                  loss_ent_sum,
                                                  loss_mag_sum,
                                                  loss_phase_sum,
-                                                 loss_centroid_sum)
+                                                 loss_centroid_sum,
+                                                 loss_centroid_fit, phase_anneal, centroid_anneal, centroid_loss_wt, loc_shift, learn_locshift, prob_locations, use_envelope)
         return loss_sum, loss_data_sum, loss_prior_sum, \
             loss_ent_sum, loss_mag_sum, loss_phase_sum, \
             loss_centroid_sum
 
-    def train_latent_gmm_and_generator(self, loss_phase_sum=None):
+    def train_latent_gmm_and_generator(self):
 
         org_models = self.models
         org_targets = self.targets
-        start_epoch = 0
 
 
         loss_list = []
@@ -669,29 +663,29 @@ class Trainer():
         loss_phase_list = []
         loss_centroid_list = []
 
-        self.init_training(loss_list,
+        loss_centroid_fit, phase_anneal, centroid_anneal, centroid_loss_wt, loc_shift, learn_locshift, prob_locations, use_envelope\
+                = self.init_training(loss_list,
                         loss_data_list,
-                        loss_mean_true_list,
                         loss_prior_list,
                         loss_ent_list,
                         loss_mag_list,
                         loss_phase_list,
                         loss_centroid_list)
 
-
-        latent_dim = self.models[0][0].shape[0]
         # Training loop
         for k in range(self.epochs_run, self.num_epochs):
             loss_sum, loss_data_sum, loss_prior_sum,\
             loss_ent_sum, loss_mag_sum, loss_phase_sum,\
             loss_centroid_sum = self.run_epoch(self,
-                                                loss_sum,
-                                                loss_data_sum,
-                                                loss_prior_sum,
-                                                loss_ent_sum,
-                                                loss_mag_sum,
-                                                loss_phase_sum,
-                                                loss_centroid_sum)
+                                               k,
+                                               loss_centroid_fit,
+                                               phase_anneal,
+                                               centroid_anneal,
+                                               centroid_loss_wt,
+                                               loc_shift,
+                                               learn_locshift,
+                                               prob_locations,
+                                               use_envelope)
             dist.all_reduce(loss_sum, op=dist.ReduceOp.SUM)
             dist.all_reduce(loss_data_sum, op=dist.ReduceOp.SUM)
             dist.all_reduce(loss_prior_sum, op=dist.ReduceOp.SUM)
@@ -705,10 +699,10 @@ class Trainer():
                         loss_ent_sum, loss_mag_sum, loss_phase_sum, loss_centroid_sum,
                         loss_data_list, loss_prior_list, loss_list, loss_mag_list, loss_phase_list,
                         loss_centroid_list, loss_ent_list, loss_mean_true_list,
-                        org_targets, org_models)
+                        org_targets, org_models, loc_shift, prob_locations)
                 #maybe get_statistics should be moved below
-                if self.save_every == 0:
-                    self.save_snapshot(k, self.model, self.snapshot_path)
+                if  k % self.save_every == 0:
+                    self._save_checkpoint(k)
         # save data
         if self.gpu_id == 0:
             b_sz = len(next(iter(self.train_data))[0])
@@ -724,8 +718,9 @@ class Trainer():
                         loss_ent_sum, loss_mag_sum, loss_phase_sum, loss_centroid_sum,
                         loss_data_list, loss_prior_list, loss_list, loss_mag_list, loss_phase_list,
                         loss_centroid_list, loss_ent_list, loss_mean_true_list,
-                        org_targets, org_models):
+                        org_targets, org_models, loc_shift, prob_locations):
         if self.normalize_loss:
+            # might be different normalization
             self.loss_list.append(self.loss_sum.item() / self.num_imgs)
             loss_data_list.append(loss_data_sum.item() / self.num_imgs)
             loss_prior_list.append(loss_prior_sum.item() / self.num_imgs)
@@ -774,6 +769,7 @@ class Trainer():
                 # print(f'epoch {k} len(models)={len(models)}')
                 # print(f'epoch {k} len(targets)={len(targets)}')
                 mean_true_diff = 0
+                #I think this should be changed...
                 for i in range(self.num_imgs):
                     target = org_targets[i]
                     model = org_models[i]
@@ -834,30 +830,13 @@ class Trainer():
                              self.dropout_val, self.layer_size, self.num_layer_decoder,
                              self.batchGD, self.dataset, self.folder, self.sup_folder, self.GMM_EPS,
                              self.task, self.latent_model, self.generator_type, envelope_params=self.envelope_params,
-                             loc_shift=self.loc_shift, prob_locations=self.prob_locations)
+                             loc_shift=loc_shift, prob_locations=prob_locations)
 
                 self.checkpoint_results(self.latent_dim, self.generator_func, org_models, str(k), self.num_imgs,
                                    self.GMM_EPS, self.folder, self.sup_folder, self.latent_model, self.image_size, self.generator_type)
 
                 self.save_model_gen_params(self.generator, org_models, self.optimizer, str(k), self.num_imgs, self.folder,
                                       self.sup_folder, self.latent_model)
-
-    def save_snapshot(self, epoch, model, snapshot_path):
-        snapshot = {
-            "MODEL_STATE": model.module.state_dict(),
-            "EPOCHS_RUN": epoch,
-        }
-        torch.save(snapshot, snapshot_path)
-        print(f"Epoch {epoch} | Training snapshot saved at {snapshot_path}")
-
-
-    def load_snapshot(self, snapshot_path, gpu_id, model):
-        loc = f"cuda:{gpu_id}"
-        snapshot = torch.load(snapshot_path, map_location=loc)
-        model.load_state_dict(snapshot["MODEL_STATE"])
-        epochs_run = snapshot["EPOCHS_RUN"]
-        print(f"Resuming training from snapshot at Epoch {epochs_run}")
-        return model, epochs_run
 
     def plot_results(self, models, generator, true_imgs, noisy_imgs, num_channels,
                      image_size, num_imgs_show, num_imgs,

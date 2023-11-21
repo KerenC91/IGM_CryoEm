@@ -15,6 +15,7 @@ import torch
 import json
 import generative_model.model_utils as model_utils
 from utils.training_utils import Trainer
+import utils.training_utils as training_utils
 import utils.data_utils as data_utils
 import debug.debug as debug
 import argparse
@@ -60,7 +61,7 @@ def get_sigmas(args):
     else:
         sigmas = args.sigma
 
-def load_train_objs(args, params):
+def load_train_objs(args):
     # Get noisy + true data
     sigmas = get_sigmas(args)
 
@@ -85,9 +86,11 @@ def load_train_objs(args, params):
     models = model_utils.get_latent_model(args.latent_dim, args.num_imgs, args.latent_type)
     #I have to convert models to be a Dataset, as in from torch.utils.data import Dataset
     dataset = MyDataset(models, noisy)
+    params = training_utils.get_gmm_gen_params(models, generator, args.num_imgs, args.latent_type, args.eps_fixed)
     optimizer = torch.optim.Adam(params, lr=args.lr)
 
-    return dataset, generator, optimizer
+    return (true, noisy, A, sigma, kernels, models,
+        dataset, generator, G, optimizer)
 
 def prepare_dataloader(dataset: Dataset, batch_size: int):
     return DataLoader(
@@ -98,13 +101,18 @@ def prepare_dataloader(dataset: Dataset, batch_size: int):
         sampler=DistributedSampler(dataset)
     )
 def main_function(rank, args):
-
+    # Apply ddp setup
     ddp_setup(rank, args.nproc)
-    params=[]
-    dataset, generator, optimizer = load_train_objs(args, params)
+
+    true, noisy, A, sigma, kernels, models,\
+    dataset, generator, G, optimizer = load_train_objs(args)
+    # kernels parameter unused
     train_data = prepare_dataloader(dataset, args.batch_size)
-    trainer = Trainer(generator, train_data, optimizer, rank,
-                      f'./{args.sup_folder}/{args.folder}/snapshot.pt', args)
+    trainer = Trainer(generator=generator, train_data=train_data, optimizer=optimizer, gpu_id=rank,
+                      snapshot_path=f'./{args.sup_folder}/{args.folder}/snapshot.pt',
+                      sigma=sigma, targets=noisy, true_imgs=true, As=A,
+                      models=models, generator_func=G,
+                      args=args)
     # Get start time
     if trainer.gpu_id not in [-1, 0]:
         dist.barrier()
@@ -112,14 +120,14 @@ def main_function(rank, args):
     if trainer.gpu_id == 0:
         print(f"Running {os.path.basename(__file__)}"
               f" with {args.nproc} gpus, "
-              f"{args.total_epochs} total epochs, "
+              f"{args.num_epochs} total epochs, "
               f"{args.num_imgs} images, "
               f"{args.batch_size} batch size, "
               f"save checkpoint every {args.save_every} epochs")
         start_time = time.time()
         dist.barrier()
     # Learn the IGM
-    trainer.train_latent_gmm_and_generator(loss_phase_sum=None)
+    trainer.train_latent_gmm_and_generator()
     # Get end time
     if trainer.gpu_id not in [-1, 0]:
         dist.barrier()
@@ -249,7 +257,7 @@ if __name__ == "__main__":
     parser.add_argument('--rand_shift', action='store_true', default=False,
                         help='perform shifts on a single image, perform learning o those augmentations'
                              '(default: False)')
-    parser.add_argument('--save_every', type=int, help='How often to save a snapshot')
+    parser.add_argument('--save_every', type=int, default=100, help='How often to save a snapshot')
     parser.add_argument('--batch_size', default=None,
                         type=int, help='Input batch size on each device (default: None)')
     parser.add_argument('--nproc', default=torch.cuda.device_count(),
