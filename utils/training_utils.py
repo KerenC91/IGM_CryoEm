@@ -249,7 +249,7 @@ class Trainer():
                 loss = 0.5 * torch.sum((meas - y) ** 2 / sigma ** 2, (-1, -2))
         return loss
 
-    def loss_center(self, center=15.5, dim=32):
+    def loss_center(self, device, center=15.5, dim=32):
         # image prior - centering loss
         X = np.concatenate([np.arange(dim).reshape((1, dim))] * dim, 0)
         Y = np.concatenate([np.arange(dim).reshape((dim, 1))] * dim, 1)
@@ -282,7 +282,7 @@ class Trainer():
             filters[i, :, x, y] = 1
         filters = Tensor(filters).to(self.device)
 
-        envelope = get_envelope(image_size=s, etype=etype, ds1=d, ds2=d + r)
+        envelope = get_envelope(image_size=s, etype=etype, ds1=d, ds2=d + r, device=self.gpu_id)
         return filters, envelope
 
     def _save_checkpoint(self, epoch):
@@ -349,7 +349,8 @@ class Trainer():
         use_envelope = True if self.envelope_params is not None else False
 
         # centroid
-        loss_centroid_fit = self.loss_center(self.device, center=self.image_size / 2 - 0.5, dim=self.image_size)
+        loss_centroid_fit = self.loss_center(device=self.device, center=self.image_size / 2 - 0.5, dim=self.image_size)
+
         if self.centroid_params:
             centroid_loss_wt, anneal_epoch = self.centroid_params
             centroid_anneal = np.ones(self.num_epochs)
@@ -358,6 +359,9 @@ class Trainer():
                 e1, e2 = anneal_epoch, anneal_epoch + n_anneal
                 centroid_anneal[e1:e2] = np.linspace(1, 0, num=e2 - e1)
                 centroid_anneal[e2:] = 0
+        else:
+            centroid_anneal = None
+            centroid_loss_wt = None
 
         # location shift w/ convolutions
         if self.locshift_params:
@@ -676,8 +680,7 @@ class Trainer():
         for k in range(self.epochs_run, self.num_epochs):
             loss_sum, loss_data_sum, loss_prior_sum,\
             loss_ent_sum, loss_mag_sum, loss_phase_sum,\
-            loss_centroid_sum = self.run_epoch(self,
-                                               k,
+            loss_centroid_sum = self.run_epoch(k,
                                                loss_centroid_fit,
                                                phase_anneal,
                                                centroid_anneal,
@@ -690,9 +693,11 @@ class Trainer():
             dist.all_reduce(loss_data_sum, op=dist.ReduceOp.SUM)
             dist.all_reduce(loss_prior_sum, op=dist.ReduceOp.SUM)
             dist.all_reduce(loss_ent_sum, op=dist.ReduceOp.SUM)
-            dist.all_reduce(loss_mag_sum, op=dist.ReduceOp.SUM)
-            dist.all_reduce(loss_phase_sum, op=dist.ReduceOp.SUM)
-            dist.all_reduce(loss_centroid_sum, op=dist.ReduceOp.SUM)
+            if 'closure-phase' in self.task:
+                dist.all_reduce(loss_mag_sum, op=dist.ReduceOp.SUM)
+                dist.all_reduce(loss_phase_sum, op=dist.ReduceOp.SUM)
+            if self.centroid_params:
+                dist.all_reduce(loss_centroid_sum, op=dist.ReduceOp.SUM)
 
             if self.gpu_id == 0:
                 self.get_statistics(k, loss_sum, loss_data_sum, loss_prior_sum,
@@ -853,7 +858,7 @@ class Trainer():
 
         if envelope_params is not None:
             etype, ds1, ds2 = envelope_params
-            envelope = get_envelope(image_size, etype=etype, ds1=ds1, ds2=ds2)
+            envelope = get_envelope(image_size, etype=etype, ds1=ds1, ds2=ds2, device=self.gpu_id)
             envelope = envelope.detach().cpu().numpy().reshape((image_size, image_size))
         elif loc_shift is not None:
             _, envelope = loc_shift

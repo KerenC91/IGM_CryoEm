@@ -6,7 +6,6 @@ from . import realnvpfc_model_batch
 from . import vae
 import os
 import math
-device = int(os.environ["LOCAL_RANK"])
 
 # GPU = torch.cuda.is_available()
 # if GPU == True:
@@ -23,11 +22,11 @@ def count_params(net):
     s = sum([np.prod(list(p.size())) for p in net.parameters()]);
     return s
 
-def get_stylegan(latent_dim, depth):
+def get_stylegan(device, latent_dim, depth):
     generator = stylegan_networks.StyledGenerator(latent_dim, depth, 5).to(device)
     return generator
 
-def get_deep_decoder(image_size, latent_dim, dropout_val, layer_size, num_layer_decoder=6, **kwargs):
+def get_deep_decoder(device, image_size, latent_dim, dropout_val, layer_size, num_layer_decoder=6, **kwargs):
     in_size = (4,4)
     out_size = (image_size, image_size)
     output_depth = 1
@@ -45,20 +44,18 @@ def get_deep_decoder(image_size, latent_dim, dropout_val, layer_size, num_layer_
     return generator
 
 
-def get_conv_decoder(image_size, latent_dim, dropout_val, layer_size,
+def get_conv_decoder(device, image_size, latent_dim, dropout_val, layer_size,
                      num_layer_decoder=6, **kwargs):
-    return get_deep_decoder(image_size, latent_dim, dropout_val, layer_size,
+    return get_deep_decoder(device, image_size, latent_dim, dropout_val, layer_size,
                             num_layer_decoder=num_layer_decoder,
                             filter_size=3,
                             upsample_mode='nearest',
                             **kwargs)
-import os
-device = int(os.environ["LOCAL_RANK"])
 
-def get_generator(latent_dim, image_size, generator_type):
+def get_generator(device, latent_dim, image_size, generator_type):
     if generator_type == 'stylegan':
         style_depth = 3
-        generator = get_stylegan(latent_dim, style_depth)
+        generator = get_stylegan(device, latent_dim, style_depth)
         step = int(math.log(image_size, 2) - 2)
         G = lambda z: generator(z, step=step)
         return generator, G
@@ -66,7 +63,7 @@ def get_generator(latent_dim, image_size, generator_type):
         dropout_val = 1e-4
         layer_size = 150
         num_layer_decoder = 6
-        generator = get_deep_decoder(image_size, latent_dim, dropout_val, layer_size, num_layer_decoder)
+        generator = get_deep_decoder(device, image_size, latent_dim, dropout_val, layer_size, num_layer_decoder)
         #generator = generator.to(device)
         G = lambda z: generator(z)
         return generator, G
@@ -74,7 +71,7 @@ def get_generator(latent_dim, image_size, generator_type):
         dropout_val = 1e-4
         layer_size = 150
         num_layer_decoder = 6
-        generator = get_conv_decoder(image_size, latent_dim, dropout_val, layer_size, num_layer_decoder)
+        generator = get_conv_decoder(device, image_size, latent_dim, dropout_val, layer_size, num_layer_decoder)
         G = lambda z: generator(z)
         return generator, G
     elif generator_type == 'vae':
@@ -88,7 +85,7 @@ def get_generator(latent_dim, image_size, generator_type):
         permute = 'random'
         batch_norm = True
         use_dropout = False
-        generator = get_flow_model(latent_dim, n_flow, affine, seqfrac, permute, batch_norm, use_dropout)
+        generator = get_flow_model(device, latent_dim, n_flow, affine, seqfrac, permute, batch_norm, use_dropout)
         G = lambda z: flow_results_with_sigmoid(generator, z)
         return generator, G
     else:
@@ -103,11 +100,11 @@ def flow_results_with_sigmoid(generator, z):
     logdet_out = logdet + det_sigmoid
     return x_out, logdet_out
 
-def get_flow_model(latent_dim, n_flow, affine, seqfrac, permute, batch_norm, use_dropout):
+def get_flow_model(device, latent_dim, n_flow, affine, seqfrac, permute, batch_norm, use_dropout):
     model = realnvpfc_model_batch.RealNVP(latent_dim, n_flow, affine=affine, seqfrac=seqfrac, permute=permute, batch_norm=batch_norm, use_dropout=use_dropout).to(device)
     return model
 
-def get_latent_model(latent_dim, num_imgs, model_type):
+def get_latent_model(device, latent_dim, num_imgs, model_type):
     if model_type == 'gmm' or model_type == 'gmm_custom':
         list_of_models = [[torch.randn((latent_dim,)).to(device),
                    torch.tril(torch.ones((latent_dim, latent_dim))).to(device)] for i in range(num_imgs)]
@@ -129,7 +126,7 @@ def get_latent_model(latent_dim, num_imgs, model_type):
         permute = 'random'
         batch_norm = True
         use_dropout = False
-        list_of_models = [get_flow_model(latent_dim, n_flow, affine, seqfrac, permute, batch_norm, use_dropout) for i in range(num_imgs)]
+        list_of_models = [get_flow_model(device, latent_dim, n_flow, affine, seqfrac, permute, batch_norm, use_dropout) for i in range(num_imgs)]
     return list_of_models
 
 def load_params(model, PATH):

@@ -60,12 +60,15 @@ def get_sigmas(args):
         sigmas = [args.sigma, args.sigma_cp]
     else:
         sigmas = args.sigma
+    
+    return sigmas
 
-def load_train_objs(args):
+
+def load_train_objs(rank, args):
     # Get noisy + true data
     sigmas = get_sigmas(args)
-
-    true, noisy, A, sigma, kernels = data_utils.get_true_and_noisy_data(image_size=args.image_size,
+    
+    true, noisy, A, sigma, kernels = data_utils.get_true_and_noisy_data(device=rank, image_size=args.image_size,
                                                                         sigma=sigmas,
                                                                         num_imgs_total=args.num_imgs,
                                                                         dataset=args.dataset,
@@ -79,11 +82,11 @@ def load_train_objs(args):
    # Get generator:
     # - generator = neural network params
     # - G = functional form
-    generator, G = model_utils.get_generator(args.latent_dim, args.image_size, args.generator_type)
+    generator, G = model_utils.get_generator(rank, args.latent_dim, args.image_size, args.generator_type)
     print("Generator number of parameters: {0}".format(model_utils.count_params(generator)))
 
     # Get latent GMM model
-    models = model_utils.get_latent_model(args.latent_dim, args.num_imgs, args.latent_type)
+    models = model_utils.get_latent_model(rank, args.latent_dim, args.num_imgs, args.latent_type)
     #I have to convert models to be a Dataset, as in from torch.utils.data import Dataset
     dataset = MyDataset(models, noisy)
     params = training_utils.get_gmm_gen_params(models, generator, args.num_imgs, args.latent_type, args.eps_fixed)
@@ -105,7 +108,7 @@ def main_function(rank, args):
     ddp_setup(rank, args.nproc)
 
     true, noisy, A, sigma, kernels, models,\
-    dataset, generator, G, optimizer = load_train_objs(args)
+    dataset, generator, G, optimizer = load_train_objs(rank, args)
     # kernels parameter unused
     train_data = prepare_dataloader(dataset, args.batch_size)
     trainer = Trainer(generator=generator, train_data=train_data, optimizer=optimizer, gpu_id=rank,
@@ -351,4 +354,4 @@ if __name__ == "__main__":
         for i in range(args.num_imgs):
             args.sigma.append(torch.tensor(sigma['arr_0'][i][np.newaxis, :, np.newaxis]))#.to(device))
 
-    mp.spawn(main_function, args=args, nprocs=args.nproc)
+    mp.spawn(main_function, args=(args,), nprocs=args.nproc)

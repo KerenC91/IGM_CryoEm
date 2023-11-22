@@ -21,7 +21,6 @@ from torch.utils.data import Dataset
 import aspire
 # os.environ['CUDA_VISIBLE_DEVICES'] = "1"
 seed = 100
-device = int(os.environ["LOCAL_RANK"])
 
 #device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 from torch.autograd import Variable
@@ -121,12 +120,12 @@ def _get_envelope(image_size, etype='sq', ds1=3, ds2=8):
     return envelope
 
 
-def get_envelope(image_size, etype='sq', ds1=3, ds2=8, device=device):
+def get_envelope(image_size, etype='sq', ds1=3, ds2=8, device=0):
     envelope = _get_envelope(image_size, etype=etype, ds1=ds1, ds2=ds2)
     return Tensor(envelope).to(device)
 
 
-def forward_model(A, x, task, idx=0, dataset=None):
+def forward_model(A, x, task, idx=0, dataset=None, device=0):
     if task == 'compressed-sensing' and dataset=="sagA_video":
         y = torch.einsum('ab,bcd->acd', x.reshape(x.shape[0], x.shape[2]*x.shape[2]), A[idx])
     elif task == 'compressed-sensing' and dataset != "sagA_video":
@@ -165,7 +164,7 @@ def forward_model(A, x, task, idx=0, dataset=None):
     return y
 
 def get_measurement_operator(task, dataset, image_size, cphase_count='min-cut0bl', data=None,
-                             envelope_params=None):
+                             envelope_params=None, device=0):
     if 'compressed-sensing' in task:
         if dataset=="sagA":
             mat_path = './utils/dft_mat64.npy'
@@ -346,7 +345,8 @@ def get_measurement_operator(task, dataset, image_size, cphase_count='min-cut0bl
         kernels = None
     return A, kernels
 
-def get_true_and_noisy_data(image_size,
+def get_true_and_noisy_data(device,
+                            image_size,
                             sigma,
                             num_imgs_total,
                             dataset,
@@ -359,7 +359,7 @@ def get_true_and_noisy_data(image_size,
                             rand_shift=False):
     ######### GET DATA ################
     kwargs = {}#{'num_workers': 1, 'pin_memory': True} if device == 'cuda' else {}
-    
+                           
     # Get noisy imgs
     noisy_imgs = []
     bad = np.array([2,3,35,38,40,48,58,59,60,69]) # for 100
