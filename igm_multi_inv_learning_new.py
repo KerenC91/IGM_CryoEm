@@ -47,7 +47,7 @@ class MyDataset(Dataset):
 
 def ddp_setup(rank, world_size):
     os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "12355" #any free port
+    os.environ["MASTER_PORT"] = "12532" #any free port
     init_process_group(backend="nccl", rank=rank, world_size=world_size)
     torch.cuda.set_device(rank)
 
@@ -97,12 +97,14 @@ def load_train_objs(rank, args):
 
 def prepare_dataloader(dataset: Dataset, batch_size: int):
     return DataLoader(
-        dataset,
+        dataset=dataset,
         batch_size=batch_size,
         pin_memory=True,
         shuffle=False,
         sampler=DistributedSampler(dataset)
     )
+
+
 def main_function(rank, args):
     # Apply ddp setup
     ddp_setup(rank, args.nproc)
@@ -133,10 +135,10 @@ def main_function(rank, args):
     trainer.train_latent_gmm_and_generator()
     # Get end time
     if trainer.gpu_id not in [-1, 0]:
-        dist.barrier()
+         dist.barrier()
 
     if trainer.gpu_id == 0:
-        # Only gpu 0 operating now...
+    # Only gpu 0 operating now...
         end_time = time.time()
         print(f"Time taken to train in {os.path.basename(__file__)}: {end_time - start_time} seconds")
         dist.barrier()
@@ -274,7 +276,7 @@ if __name__ == "__main__":
     # ddp setup
     # rank is the device
     if args.batch_size is None:
-        args.batch_size = int(args.num_imgs / args.nproc)
+        args.batch_size = 1#int(args.num_imgs / args.nproc)
     dtype = torch.FloatTensor
 
     currentdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))

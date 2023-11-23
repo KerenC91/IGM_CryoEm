@@ -286,8 +286,8 @@ class Trainer():
         return filters, envelope
 
     def _save_checkpoint(self, epoch):
-        ckp = self.model.module.state_dict()
-        PATH = f"./figures/checkpoint_{self.suffix}.pt"
+        ckp = self.generator.module.state_dict()
+        PATH = self.snapshot_path
         torch.save(ckp, PATH)
         #print(f"Epoch {epoch} | Training checkpoint saved at {PATH}")
 
@@ -698,24 +698,67 @@ class Trainer():
                 dist.all_reduce(loss_phase_sum, op=dist.ReduceOp.SUM)
             if self.centroid_params:
                 dist.all_reduce(loss_centroid_sum, op=dist.ReduceOp.SUM)
-
+            
             if self.gpu_id == 0:
-                self.get_statistics(k, loss_sum, loss_data_sum, loss_prior_sum,
-                        loss_ent_sum, loss_mag_sum, loss_phase_sum, loss_centroid_sum,
-                        loss_data_list, loss_prior_list, loss_list, loss_mag_list, loss_phase_list,
-                        loss_centroid_list, loss_ent_list, loss_mean_true_list,
-                        org_targets, org_models, loc_shift, prob_locations)
-                #maybe get_statistics should be moved below
-                if  k % self.save_every == 0:
-                    self._save_checkpoint(k)
+                if self.normalize_loss:
+                    # might be different normalization
+                    loss_list.append(loss_sum.item() / self.num_imgs)
+                    loss_data_list.append(loss_data_sum.item() / self.num_imgs)
+                    loss_prior_list.append(loss_prior_sum.item() / self.num_imgs)
+                else:
+                    loss_list.append(loss_sum.item())
+                    loss_data_list.append(loss_data_sum.item())
+                    loss_prior_list.append(loss_prior_sum.item())
+                if 'closure-phase' in self.task:
+                    loss_mag_list.append(loss_mag_sum.item())
+                    loss_phase_list.append(loss_phase_sum.item())
+                if self.centroid_params:
+                    loss_centroid_list.append(loss_centroid_sum.item())
+                if self.no_entropy == False:
+                    if self.normalize_loss:
+                        loss_ent_list.append(loss_ent_sum.item() / self.num_imgs)
+                    else:
+                        loss_ent_list.append(loss_ent_sum.item())
+                else:
+                    loss_ent_list.append(loss_ent_sum)
+                if k % 50 == 0:
+                    print("-----------------------------")
+                    print("Epoch {}".format(k))
+                    # print("Curr ELBO: {}".format(cur_loss))
+                    print("Loss all: {:e}".format(loss_sum.item() / self.num_imgs))
+                    print("Loss data fit: {:e}".format(loss_data_sum.item() / self.num_imgs))
+                    if 'closure-phase' in self.task:
+                        print(f"Scaled loss magnitude: {loss_mag_sum.item() / self.num_imgs:e} / "
+                              f"phase: {loss_phase_sum.item() / self.num_imgs:e}")
+                    if self.centroid_params:
+                        print(f"Loss centroid: {loss_centroid_sum.item() / self.num_imgs:e}")
+                    print("Loss prior: {}".format(loss_prior_sum.item() / self.num_imgs))
+                    if self.no_entropy == False:
+                        print("Loss entropy: {}".format(loss_ent_sum.item() / self.num_imgs))
+                    else:
+                        print("Loss entropy: {}".format(loss_ent_sum / self.num_imgs))
+                    print("-----------------------------")
+
+            if self.gpu_id == 0 and k % self.save_every == 0:
+                self._save_checkpoint(k)
+                self.checkpoint_results(self.latent_dim, self.generator_func, org_models, str(k), self.num_imgs,
+                                   self.GMM_EPS, self.folder, self.sup_folder, self.latent_model, self.image_size, self.generator_type)
+
+                self.save_model_gen_params(self.generator, org_models, self.optimizer, str(k), self.num_imgs, self.folder,
+                                      self.sup_folder, self.latent_model)
         # save data
         if self.gpu_id == 0:
+            self.get_statistics(k, loss_sum, loss_data_sum, loss_prior_sum,
+                    loss_ent_sum, loss_mag_sum, loss_phase_sum, loss_centroid_sum,
+                    loss_data_list, loss_prior_list, loss_list, loss_mag_list, loss_phase_list,
+                    loss_centroid_list, loss_ent_list, loss_mean_true_list,
+                    org_targets, org_models, loc_shift, prob_locations)
             b_sz = len(next(iter(self.train_data))[0])
-            #print(f'#loss points {len(loss_list)}')
-            np.save(f'./figures/loss_ddp_{self.num_imgs}im_{b_sz}bs_{self.num_epochs}epochs_{self.world_size}gpus_{self.suffix}.npy', loss_list)
+            print(f'#loss points {len(loss_list)}')
+            np.save(f'./{self.sup_folder}/{self.folder}/loss_ddp_{self.num_imgs}im_{b_sz}bs_{self.num_epochs}epochs_{self.world_size}gpus_{self.suffix}.npy', loss_list)
             plt.figure()
             plt.plot(loss_list)
-            plt.savefig(f'./figures/loss_ddp_{self.num_imgs}im_{b_sz}bs_{self.num_epochs}epochs_{self.world_size}gpus_{self.suffix}.png')
+            plt.savefig(f'./{self.sup_folder}/{self.folder}/loss_ddp_{self.num_imgs}im_{b_sz}bs_{self.num_epochs}epochs_{self.world_size}gpus_{self.suffix}.png')
             plt.close()
         #return self.models, self.generator
 
@@ -724,124 +767,80 @@ class Trainer():
                         loss_data_list, loss_prior_list, loss_list, loss_mag_list, loss_phase_list,
                         loss_centroid_list, loss_ent_list, loss_mean_true_list,
                         org_targets, org_models, loc_shift, prob_locations):
-        if self.normalize_loss:
-            # might be different normalization
-            self.loss_list.append(self.loss_sum.item() / self.num_imgs)
-            loss_data_list.append(loss_data_sum.item() / self.num_imgs)
-            loss_prior_list.append(loss_prior_sum.item() / self.num_imgs)
+            #if ((k < 500) and (k % 100 == 0)) or ((k >= 500) and (k % 1000 == 0)):
+        if 'multi' in self.task:
+            img_indices = [i for i in range(self.num_imgs_show // 2)]
+            img_indices += [self.num_imgs // 2 + i for i in range(self.num_imgs_show)]
         else:
-            loss_list.append(loss_sum.item())
-            loss_data_list.append(loss_data_sum.item())
-            loss_prior_list.append(loss_prior_sum.item())
+            img_indices = range(self.num_imgs_show)
+        avg_img_list = []
+        std_img_list = []
+        mean_true_diff_list = []
+        # print(f'epoch {k} len(models)={len(models)}')
+        # print(f'epoch {k} len(targets)={len(targets)}')
+        mean_true_diff = 0
+        #I think this should be changed...
+        for i in range(self.num_imgs):
+            target = org_targets[i]
+            model = org_models[i]
+            avg, std = self.get_avg_std_img(model, self.latent_dim)
+            avg_img_list.append(avg)
+            std_img_list.append(std)
+    
+            mean_true_diff_val = torch.abs(torch.sum(avg - self.true_imgs[i], (-1, -2))) / torch.norm(self.true_imgs[i])
+            mean_true_diff_val = mean_true_diff_val.detach().cpu().numpy()[0][0]
+            mean_true_diff += mean_true_diff
+            # print(f'mean_true_diff={mean_true_diff}')
+            # mean_true_diff_list[i].append(mean_true_diff)
+        loss_mean_true_list.append(mean_true_diff / self.num_imgs)
+    
+        plt.figure()
+        plt.plot(loss_mean_true_list, label=f"loss")
+        plt.legend()
+        plt.xlabel('epochs')
+        plt.ylabel('|mu-x|/num_pixels')
+        plt.title('loss of mean vs true images')
+        plt.savefig(f'./{self.sup_folder}/{self.folder}/loss mean true.png')
+        plt.close()
+    
+        plt.figure()
+        plt.plot(loss_list)
+        plt.savefig(f'./{self.sup_folder}/{self.folder}/loss.png')
+        plt.close()
+    
+        plt.figure()
+        plt.plot(loss_list, label="all")
+        plt.plot(loss_data_list, label="data")
+        plt.plot(loss_prior_list, label="prior")
+        plt.plot(loss_ent_list, label="ent")
         if 'closure-phase' in self.task:
-            loss_mag_list.append(loss_mag_sum.item())
-            loss_phase_list.append(loss_phase_sum.item())
+            plt.plot(loss_mag_list, label='mag')
+            plt.plot(loss_phase_list, label='phase')
         if self.centroid_params:
-            loss_centroid_list.append(loss_centroid_sum.item())
-        if self.no_entropy == False:
-            if self.normalize_loss:
-                loss_ent_list.append(loss_ent_sum.item() / self.num_imgs)
-            else:
-                loss_ent_list.append(loss_ent_sum.item())
-        else:
-            loss_ent_list.append(loss_ent_sum)
-        if k % 50 == 0:
-            print("-----------------------------")
-            print("Epoch {}".format(k))
-            # print("Curr ELBO: {}".format(cur_loss))
-            print("Loss all: {:e}".format(loss_sum.item() / self.num_imgs))
-            print("Loss data fit: {:e}".format(loss_data_sum.item() / self.num_imgs))
-            if 'closure-phase' in self.task:
-                print(f"Scaled loss magnitude: {loss_mag_sum.item() / self.num_imgs:e} / "
-                      f"phase: {loss_phase_sum.item() / self.num_imgs:e}")
-            if self.centroid_params:
-                print(f"Loss centroid: {loss_centroid_sum.item() / self.num_imgs:e}")
-            print("Loss prior: {}".format(loss_prior_sum.item() / self.num_imgs))
-            if self.no_entropy == False:
-                print("Loss entropy: {}".format(loss_ent_sum.item() / self.num_imgs))
-            else:
-                print("Loss entropy: {}".format(loss_ent_sum / self.num_imgs))
-            print("-----------------------------")
-            if ((k < 500) and (k % 100 == 0)) or ((k >= 500) and (k % 1000 == 0)):
-                if 'multi' in self.task:
-                    img_indices = [i for i in range(self.num_imgs_show // 2)]
-                    img_indices += [self.num_imgs // 2 + i for i in range(self.num_imgs_show)]
-                else:
-                    img_indices = range(self.num_imgs_show)
-                avg_img_list = []
-                std_img_list = []
-                mean_true_diff_list = []
-                # print(f'epoch {k} len(models)={len(models)}')
-                # print(f'epoch {k} len(targets)={len(targets)}')
-                mean_true_diff = 0
-                #I think this should be changed...
-                for i in range(self.num_imgs):
-                    target = org_targets[i]
-                    model = org_models[i]
-                    avg, std = self.get_avg_std_img(model, self.latent_dim)
-                    avg_img_list.append(avg)
-                    std_img_list.append(std)
-
-                    mean_true_diff_val = torch.abs(torch.sum(avg - self.true_imgs[i], (-1, -2))) / torch.norm(self.true_imgs[i])
-                    mean_true_diff_val = mean_true_diff_val.detach().cpu().numpy()[0][0]
-                    mean_true_diff += mean_true_diff
-                    # print(f'mean_true_diff={mean_true_diff}')
-                    # mean_true_diff_list[i].append(mean_true_diff)
-                self.loss_mean_true_list.append(mean_true_diff / self.num_imgs)
-
-                plt.figure()
-                plt.plot(loss_mean_true_list, label=f"loss")
-                plt.legend()
-                plt.xlabel('epochs')
-                plt.ylabel('|mu-x|/num_pixels')
-                plt.title('loss of mean vs true images')
-                plt.savefig(f'./{self.sup_folder}/{self.folder}/loss mean true.png')
-                plt.close()
-
-                plt.figure()
-                plt.plot(loss_list)
-                plt.savefig(f'./{self.sup_folder}/{self.folder}/loss.png')
-                plt.close()
-
-                plt.figure()
-                plt.plot(loss_list, label="all")
-                plt.plot(loss_data_list, label="data")
-                plt.plot(loss_prior_list, label="prior")
-                plt.plot(loss_ent_list, label="ent")
-                if 'closure-phase' in self.task:
-                    plt.plot(loss_mag_list, label='mag')
-                    plt.plot(loss_phase_list, label='phase')
-                if self.centroid_params:
-                    plt.plot(loss_centroid_list, label='centroid')
-                plt.legend()
-                plt.savefig(f'./{self.sup_folder}/{self.folder}/loss_all.png')
-                plt.yscale('log')
-                plt.savefig(f'./{self.sup_folder}/{self.folder}/loss_all_log.png')
-                plt.close()
-
-                np.save(f'./{self.sup_folder}/{self.folder}/loss.npy', loss_list)
-                np.save(f'./{self.sup_folder}/{self.folder}/loss_data.npy', loss_data_list)
-                np.save(f'./{self.sup_folder}/{self.folder}/loss_prior.npy', loss_prior_list)
-                np.save(f'./{self.sup_folder}/{self.folder}/loss_ent.npy', loss_ent_list)
-                if 'closure-phase' in self.task:
-                    np.save(f'./{self.sup_folder}/{self.folder}/loss_mag.npy', loss_mag_list)
-                    np.save(f'./{self.sup_folder}/{self.folder}/loss_phase.npy', loss_phase_list)
-                if self.centroid_params:
-                    np.save(f'./{self.sup_folder}/{self.folder}/loss_centroid.npy', loss_centroid_list)
-
-                self.plot_results(org_models, self.generator_func, self.true_imgs, org_targets, self.num_channels,
-                             self.image_size, self.num_imgs_show, self.num_imgs,
-                             self.sigma, avg_img_list[:self.num_imgs_show], std_img_list[:self.num_imgs_show], self.save_img, str(k),
-                             self.dropout_val, self.layer_size, self.num_layer_decoder,
-                             self.batchGD, self.dataset, self.folder, self.sup_folder, self.GMM_EPS,
-                             self.task, self.latent_model, self.generator_type, envelope_params=self.envelope_params,
-                             loc_shift=loc_shift, prob_locations=prob_locations)
-
-                self.checkpoint_results(self.latent_dim, self.generator_func, org_models, str(k), self.num_imgs,
-                                   self.GMM_EPS, self.folder, self.sup_folder, self.latent_model, self.image_size, self.generator_type)
-
-                self.save_model_gen_params(self.generator, org_models, self.optimizer, str(k), self.num_imgs, self.folder,
-                                      self.sup_folder, self.latent_model)
+            plt.plot(loss_centroid_list, label='centroid')
+        plt.legend()
+        plt.savefig(f'./{self.sup_folder}/{self.folder}/loss_all.png')
+        plt.yscale('log')
+        plt.savefig(f'./{self.sup_folder}/{self.folder}/loss_all_log.png')
+        plt.close()
+    
+        np.save(f'./{self.sup_folder}/{self.folder}/loss.npy', loss_list)
+        np.save(f'./{self.sup_folder}/{self.folder}/loss_data.npy', loss_data_list)
+        np.save(f'./{self.sup_folder}/{self.folder}/loss_prior.npy', loss_prior_list)
+        np.save(f'./{self.sup_folder}/{self.folder}/loss_ent.npy', loss_ent_list)
+        if 'closure-phase' in self.task:
+            np.save(f'./{self.sup_folder}/{self.folder}/loss_mag.npy', loss_mag_list)
+            np.save(f'./{self.sup_folder}/{self.folder}/loss_phase.npy', loss_phase_list)
+        if self.centroid_params:
+            np.save(f'./{self.sup_folder}/{self.folder}/loss_centroid.npy', loss_centroid_list)
+    
+        self.plot_results(org_models, self.generator_func, self.true_imgs, org_targets, self.num_channels,
+                     self.image_size, self.num_imgs_show, self.num_imgs,
+                     self.sigma, avg_img_list[:self.num_imgs_show], std_img_list[:self.num_imgs_show], self.save_img, str(k),
+                     self.dropout_val, self.layer_size, self.num_layer_decoder,
+                     self.batchGD, self.dataset, self.folder, self.sup_folder, self.GMM_EPS,
+                     self.task, self.latent_model, self.generator_type, envelope_params=self.envelope_params,
+                     loc_shift=loc_shift, prob_locations=prob_locations)
 
     def plot_results(self, models, generator, true_imgs, noisy_imgs, num_channels,
                      image_size, num_imgs_show, num_imgs,
