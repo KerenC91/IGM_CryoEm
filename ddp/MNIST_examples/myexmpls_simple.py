@@ -219,5 +219,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
     # load_checkpoints('./figures/checkpoint_ddp_24im_parallel_bs1_2gpu_norm_1epoch.pt',
     #                  './figures/checkpoint_24im_bs1_1epoch_unnorm.pt')
-    plot_all(folder='./figures/1000epochs/4im')
+    #plot_all(folder='./figures/1000epochs/4im')
     main(args.total_epochs, args.batch_size, args.num_imgs, args.suffix)

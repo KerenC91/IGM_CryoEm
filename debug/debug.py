@@ -27,6 +27,8 @@ def set_args(args: Namespace):
     args.latent_type = "gmm"
     args.normalize_loss = True
     args.suffix = "debug"
+    args.nproc = 1
+    args.batch_size = 1
 
 
 def get_loss(f_loss, f_loss_ent, f_loss_prior, f_loss_data, num_epoch):

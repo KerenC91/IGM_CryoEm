@@ -344,7 +344,8 @@ def get_measurement_operator(task, dataset, image_size, cphase_count='min-cut0bl
         A = None
         kernels = None
     return A, kernels
-
+  
+    
 def get_true_and_noisy_data(device,
                             image_size,
                             sigma,
@@ -388,7 +389,9 @@ def get_true_and_noisy_data(device,
                 test_imgs.data = test_imgs.data[idx]    
 
             test_imgs.data = test_imgs.data[:num_imgs_total]
-            
+
+            # test_imgs.targets = test_imgs.targets.to('cpu')
+            # test_imgs.data = test_imgs.data.to('cpu') 
             if rand_shift:
                 src = test_imgs.data[0]
                 for i in range(1, num_imgs_total):
@@ -502,12 +505,30 @@ def get_true_and_noisy_data(device,
         As, kernels = get_measurement_operator(task, dataset, image_size)
 
         
-     
-    test_imgs_loader = torch.utils.data.DataLoader(test_imgs,
-                                              batch_size=1, 
-                                              shuffle=False, 
-                                              **kwargs)
-    
+    if isinstance(device, int):
+        test_imgs_loader = torch.utils.data.DataLoader(test_imgs,
+                                                  batch_size=1, 
+                                                  pin_memory=True,
+                                                  shuffle=False, 
+                                                  **kwargs)
+    else:
+        test_imgs_loader = torch.utils.data.DataLoader(test_imgs,
+                                                  batch_size=1, 
+                                                  pin_memory=False,
+                                                  shuffle=False, 
+                                                  **kwargs)
+    # if device == 0:
+    #     l = 0
+
+    # for data, label in test_imgs_loader:
+    #     data = data.to(device)
+    #     label = label.to(device)
+    #     if device == 0:
+    #         filename = f'./figures/image_{l}.png'
+    #         plt.imshow(data.cpu().numpy().squeeze())
+    #         plt.figure().savefig(filename)
+    #         print(f"label={label}")
+    #         l+=1
     ######## GET NOISY DATA ##################
     if 'closure-phase' in task:
         sigma_v, sigma_cp = sigma  # hack
@@ -625,6 +646,7 @@ def get_true_and_noisy_data(device,
                             noise = sigma*torch.randn(1,1,image_size,image_size).to(device)
                             x = data.to(device)
                             true_imgs.append(x)
+                            #print(f'{x}')
                             y = x + noise
                             noisy_imgs.append(y)
                         elif task == 'closure-phase':

@@ -72,6 +72,7 @@ def get_net_input(num_channels,w=128,h=128):
     width = int(128/totalupsample)
     height = int(128/totalupsample)
     shape = [1,num_channels[0], width, height]
+    dtype = torch.set_default_dtype(torch.float32)
     net_input = Variable(torch.zeros(shape)).type(dtype)
     net_input.data.uniform_()
     net_input.data *= 1./10

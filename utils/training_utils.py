@@ -90,7 +90,8 @@ class Trainer():
         self.gpu_id = gpu_id
         self.device = gpu_id # reduandant, remove later!
         self.generator = generator.to(gpu_id)
-        self.generator = DDP(generator, device_ids=[gpu_id])
+        if isinstance(gpu_id, int):
+            self.generator = DDP(generator, device_ids=[gpu_id])
         self.train_data = train_data
         self.optimizer = optimizer
         self.save_every = args.save_every
@@ -145,21 +146,21 @@ class Trainer():
                            torch.tril(torch.ones((self.latent_dim, self.latent_dim))).to(self.device)] for i in range(self.num_imgs)]
         return list_of_models
 
-    def get_avg_std_img(self, model, latent_dim):
-        nimg = 40
+    def get_avg_std_img(self, model, nimg = 40):
+        
         #     if self.latent_model == 'flow':
 
         if (self.latent_model == 'gmm') or (self.latent_model == "gmm_eye"):
             prior = torch.distributions.MultivariateNormal(model[0],
-                                                           (self.GMM_EPS) * torch.eye(latent_dim).to(self.device) + model[1] @ (
+                                                           (self.GMM_EPS) * torch.eye(self.latent_dim).to(self.device) + model[1] @ (
                                                                model[1].t()))
             z_sample = prior.sample((nimg,)).to(self.device)
         elif (self.latent_model == 'gmm_low') or (self.latent_model == "gmm_low_eye"):
             prior = torch.distributions.LowRankMultivariateNormal(model[0], model[1], model[2] * model[2] + 1e-6)
             z_sample = prior.sample((nimg,)).to(self.device)
         elif (self.latent_model == "gmm_custom"):
-            prior = GMM_Custom(model[0], model[1], self.GMM_EPS, self.device, latent_dim)
-            # (self.GMM_EPS)*torch.eye(latent_dim).to(self.device)+model[1]@(model[1].t()))
+            prior = GMM_Custom(model[0], model[1], self.GMM_EPS, self.device, self.latent_dim)
+            # (self.GMM_EPS)*torch.eye(self.latent_dim).to(self.device)+model[1]@(model[1].t()))
             z_sample = prior.sample((nimg,)).to(self.device)
 
         if self.generator_type == "norm_flow":
@@ -169,7 +170,10 @@ class Trainer():
             img = self.generator(z_sample)
         avg = torch.mean(img, dim=0)
         std = torch.std(img, dim=0)
+
         return avg, std
+    
+    
     def forward_model(self, A, x, task, idx=0, dataset=None, use_envelope=False):
         if task == 'phase-retrieval':
             y_complex = torch.fft.fft2(A[1] * x)
@@ -211,6 +215,7 @@ class Trainer():
 
         if task == 'denoising':
             loss = 0.5 * torch.sum((x - y) ** 2 / sigma ** 2, (-1, -2))
+            #print(f'loss data shape {loss.shape}')
         elif task == 'phase-retrieval':
             meas = self.forward_model(A, x, task)
             loss = 0.5 * torch.sum((meas - y) ** 2 / (sigma * A[0]) ** 2, (-1, -2))
@@ -503,28 +508,45 @@ class Trainer():
                     k,
                     loss_sum, loss_data_sum, loss_prior_sum, loss_ent_sum, loss_mag_sum, loss_phase_sum, loss_centroid_sum,
                     loss_centroid_fit, phase_anneal, centroid_anneal, centroid_loss_wt, loc_shift, learn_locshift, prob_locations, use_envelope):
+        b_sz = len(next(iter(self.train_data))[0])
         if k % 50 == 0:
-            b_sz = len(next(iter(self.train_data))[0])
             print(f"[GPU{self.gpu_id}] Epoch {k} | Batchsize: {b_sz} | Steps: {len(self.train_data)}")
-        self.train_data.sampler.set_epoch(k)
         i = 0
         for models, targets in self.train_data:
             models = models.to(self.gpu_id)
             targets = targets.to(self.gpu_id)
+            # if self.gpu_id == 0:
+            #     filename = f'./figures/target_train_{i}.png'
+            #     plt.imshow(targets.cpu().numpy().squeeze())
+            #     plt.figure().savefig(filename)
+            #     i+=1
+            # print('inside train_latent_gmm_and_generator')
+            # print('targets')
+            # print(f'{targets}')
+            # print('models')
+            # print(f'{models}')
             if self.batchGD == False:
                 self.optimizer.zero_grad()
-            target = targets[0]
-            model = models[0]
+            #target = targets[0]
+            #model = models[0]
 
             #                 mu, L = models[i]
             #                 spread_cov = (L@(L.t())).to(device) + torch.diag(torch.ones(latent_dim)).to(device)*(GMM_EPS)
             #                 prior = torch.distributions.MultivariateNormal(mu, spread_cov)
 
             if (self.latent_model == 'gmm') or (self.latent_model == "gmm_eye"):
-                mu, L = torch.split(model, [1, self.latent_dim], dim=0)
-                mu = mu.squeeze(0)
-
-                spread_cov = (L @ (L.t())).to(self.device) + torch.diag(torch.ones(self.latent_dim)).to(self.device) * (self.GMM_EPS)
+                if b_sz == 1:
+                    mu, L = torch.split(models, [1, self.latent_dim], dim=1)
+                    mu = mu.squeeze(0).squeeze(0)
+                    L = L.squeeze(0)
+                    spread_cov = (L @ (L.t())).to(self.device) + torch.diag(torch.ones(self.latent_dim)).to(self.device) * (self.GMM_EPS)
+                else:
+                    mu, L = torch.split(models, [1, self.latent_dim], dim=1)
+                    mu = mu.squeeze(1)
+                    L_T = torch.transpose(L, 1, 2)
+                    diagonal_ones = torch.diag(torch.ones(self.latent_dim))
+                    expanded_diagonal_ones = diagonal_ones.unsqueeze(0).expand(b_sz, self.latent_dim, self.latent_dim)
+                    spread_cov = (L @ (L_T)).to(self.device) + expanded_diagonal_ones.to(self.device) * (self.GMM_EPS)
                 prior = torch.distributions.MultivariateNormal(mu, spread_cov, validate_args=self.validate_args)
             elif (self.latent_model == 'gmm_low') or (self.latent_model == "gmm_low_eye"):
                 mu, L, eps = models[i]
@@ -542,8 +564,15 @@ class Trainer():
                 img, logdet = self.generator_func(z_sample)
                 img = img.reshape([self.num_samples, self.image_size, self.image_size])
             else:
-                img = self.generator_func(z_sample)
-            #                 print(img.shape, z_sample.shape, img.shape)
+                if b_sz == 1:
+                    img = self.generator_func(z_sample)
+                else:
+                    img = torch.zeros(b_sz, 12, 1, self.image_size, self.image_size)
+                    for j in range(b_sz):
+                        img[j] = self.generator_func(z_sample[:, j, :].squeeze(1))
+                #[:, 0, :]
+                # img = self.generator_func(z_sample)
+            # print(img.shape, z_sample.shape, img.shape)
 
             if self.no_entropy == True:
                 log_ent = 0
@@ -565,8 +594,8 @@ class Trainer():
                 img = envelope * img
                 img = functional.conv2d(filters.transpose(0, 1), img.flip((3)).flip((2)),
                                         padding='same', groups=filters.shape[0]).transpose(0, 1)
-
-            loss_data = self.loss_data_fit(img, target, self.sigma, self.As, self.task, idx=i, dataset=self.dataset,
+            #img = 
+            loss_data = self.loss_data_fit(img, targets, self.sigma, self.As, self.task, idx=i, dataset=self.dataset,
                                       gamma=self.gamma, cp_scale=self.cphase_scale * phase_anneal[k],
                                       use_envelope=use_envelope)
 
@@ -627,7 +656,8 @@ class Trainer():
         loss_centroid_sum = 0
 
         b_sz = len(next(iter(self.train_data))[0])
-        self.train_data.sampler.set_epoch(k)
+        if isinstance(self.device, int):
+            self.train_data.sampler.set_epoch(k)
         self.optimizer.zero_grad()
         if 'multi' in self.task:
             # Maybe wrong inside, don't really care
@@ -653,10 +683,6 @@ class Trainer():
             loss_centroid_sum
 
     def train_latent_gmm_and_generator(self):
-
-        org_models = self.models
-        org_targets = self.targets
-
 
         loss_list = []
         loss_data_list = []
@@ -689,17 +715,18 @@ class Trainer():
                                                learn_locshift,
                                                prob_locations,
                                                use_envelope)
-            dist.all_reduce(loss_sum, op=dist.ReduceOp.SUM)
-            dist.all_reduce(loss_data_sum, op=dist.ReduceOp.SUM)
-            dist.all_reduce(loss_prior_sum, op=dist.ReduceOp.SUM)
-            dist.all_reduce(loss_ent_sum, op=dist.ReduceOp.SUM)
-            if 'closure-phase' in self.task:
-                dist.all_reduce(loss_mag_sum, op=dist.ReduceOp.SUM)
-                dist.all_reduce(loss_phase_sum, op=dist.ReduceOp.SUM)
-            if self.centroid_params:
-                dist.all_reduce(loss_centroid_sum, op=dist.ReduceOp.SUM)
+            if isinstance(self.gpu_id, int):
+                dist.all_reduce(loss_sum, op=dist.ReduceOp.SUM)
+                dist.all_reduce(loss_data_sum, op=dist.ReduceOp.SUM)
+                dist.all_reduce(loss_prior_sum, op=dist.ReduceOp.SUM)
+                dist.all_reduce(loss_ent_sum, op=dist.ReduceOp.SUM)
+                if 'closure-phase' in self.task:
+                    dist.all_reduce(loss_mag_sum, op=dist.ReduceOp.SUM)
+                    dist.all_reduce(loss_phase_sum, op=dist.ReduceOp.SUM)
+                if self.centroid_params:
+                    dist.all_reduce(loss_centroid_sum, op=dist.ReduceOp.SUM)
             
-            if self.gpu_id == 0:
+            if self.gpu_id == 0 or (isinstance(self.gpu_id, int) != True):
                 if self.normalize_loss:
                     # might be different normalization
                     loss_list.append(loss_sum.item() / self.num_imgs)
@@ -721,81 +748,76 @@ class Trainer():
                         loss_ent_list.append(loss_ent_sum.item())
                 else:
                     loss_ent_list.append(loss_ent_sum)
-                if k % 50 == 0:
-                    print("-----------------------------")
-                    print("Epoch {}".format(k))
-                    # print("Curr ELBO: {}".format(cur_loss))
-                    print("Loss all: {:e}".format(loss_sum.item() / self.num_imgs))
-                    print("Loss data fit: {:e}".format(loss_data_sum.item() / self.num_imgs))
-                    if 'closure-phase' in self.task:
-                        print(f"Scaled loss magnitude: {loss_mag_sum.item() / self.num_imgs:e} / "
-                              f"phase: {loss_phase_sum.item() / self.num_imgs:e}")
-                    if self.centroid_params:
-                        print(f"Loss centroid: {loss_centroid_sum.item() / self.num_imgs:e}")
-                    print("Loss prior: {}".format(loss_prior_sum.item() / self.num_imgs))
-                    if self.no_entropy == False:
-                        print("Loss entropy: {}".format(loss_ent_sum.item() / self.num_imgs))
-                    else:
-                        print("Loss entropy: {}".format(loss_ent_sum / self.num_imgs))
-                    print("-----------------------------")
-
+                
+                mean_true_diff_loss = self.get_mu_loss()
+                loss_mean_true_list.append(mean_true_diff_loss)
+                
+                self.plot_epoch_results(k, loss_sum, loss_data_sum, loss_prior_sum,
+                        loss_ent_sum, loss_mag_sum, loss_phase_sum, loss_centroid_sum,
+                        self.targets, self.models, loc_shift, prob_locations)
+                        
             if self.gpu_id == 0 and k % self.save_every == 0:
                 self._save_checkpoint(k)
-                self.checkpoint_results(self.latent_dim, self.generator_func, org_models, str(k), self.num_imgs,
+                self.checkpoint_results(self.latent_dim, self.generator_func, self.models, str(k), self.num_imgs,
                                    self.GMM_EPS, self.folder, self.sup_folder, self.latent_model, self.image_size, self.generator_type)
 
-                self.save_model_gen_params(self.generator, org_models, self.optimizer, str(k), self.num_imgs, self.folder,
+                self.save_model_gen_params(self.generator, self.models, self.optimizer, str(k), self.num_imgs, self.folder,
                                       self.sup_folder, self.latent_model)
         # save data
-        if self.gpu_id == 0:
-            self.get_statistics(k, loss_sum, loss_data_sum, loss_prior_sum,
-                    loss_ent_sum, loss_mag_sum, loss_phase_sum, loss_centroid_sum,
-                    loss_data_list, loss_prior_list, loss_list, loss_mag_list, loss_phase_list,
-                    loss_centroid_list, loss_ent_list, loss_mean_true_list,
-                    org_targets, org_models, loc_shift, prob_locations)
-            b_sz = len(next(iter(self.train_data))[0])
-            print(f'#loss points {len(loss_list)}')
-            np.save(f'./{self.sup_folder}/{self.folder}/loss_ddp_{self.num_imgs}im_{b_sz}bs_{self.num_epochs}epochs_{self.world_size}gpus_{self.suffix}.npy', loss_list)
-            plt.figure()
-            plt.plot(loss_list)
-            plt.savefig(f'./{self.sup_folder}/{self.folder}/loss_ddp_{self.num_imgs}im_{b_sz}bs_{self.num_epochs}epochs_{self.world_size}gpus_{self.suffix}.png')
-            plt.close()
+        if self.gpu_id == 0 or self.gpu_id.type == 'cuda':
+            self.get_statistics(loss_data_list, loss_prior_list, loss_list, loss_mag_list, loss_phase_list,
+                    loss_centroid_list, loss_ent_list, loss_mean_true_list, self.targets, self.models)
         #return self.models, self.generator
 
-    def get_statistics(self, k, loss_sum, loss_data_sum, loss_prior_sum,
+    def plot_epoch_results(self, k, loss_sum, loss_data_sum, loss_prior_sum,
                         loss_ent_sum, loss_mag_sum, loss_phase_sum, loss_centroid_sum,
-                        loss_data_list, loss_prior_list, loss_list, loss_mag_list, loss_phase_list,
-                        loss_centroid_list, loss_ent_list, loss_mean_true_list,
                         org_targets, org_models, loc_shift, prob_locations):
-            #if ((k < 500) and (k % 100 == 0)) or ((k >= 500) and (k % 1000 == 0)):
-        if 'multi' in self.task:
-            img_indices = [i for i in range(self.num_imgs_show // 2)]
-            img_indices += [self.num_imgs // 2 + i for i in range(self.num_imgs_show)]
-        else:
-            img_indices = range(self.num_imgs_show)
-        avg_img_list = []
-        std_img_list = []
-        mean_true_diff_list = []
-        # print(f'epoch {k} len(models)={len(models)}')
-        # print(f'epoch {k} len(targets)={len(targets)}')
-        mean_true_diff = 0
-        #I think this should be changed...
-        for i in range(self.num_imgs):
-            target = org_targets[i]
-            model = org_models[i]
-            avg, std = self.get_avg_std_img(model, self.latent_dim)
-            avg_img_list.append(avg)
-            std_img_list.append(std)
-    
-            mean_true_diff_val = torch.abs(torch.sum(avg - self.true_imgs[i], (-1, -2))) / torch.norm(self.true_imgs[i])
-            mean_true_diff_val = mean_true_diff_val.detach().cpu().numpy()[0][0]
-            mean_true_diff += mean_true_diff
-            # print(f'mean_true_diff={mean_true_diff}')
-            # mean_true_diff_list[i].append(mean_true_diff)
-        loss_mean_true_list.append(mean_true_diff / self.num_imgs)
-    
+        if k % 50 == 0:
+            print("-----------------------------")
+            print("Epoch {}".format(k))
+            # print("Curr ELBO: {}".format(cur_loss))
+            print("Loss all: {:e}".format(loss_sum.item() / self.num_imgs))
+            print("Loss data fit: {:e}".format(loss_data_sum.item() / self.num_imgs))
+            if 'closure-phase' in self.task:
+                print(f"Scaled loss magnitude: {loss_mag_sum.item() / self.num_imgs:e} / "
+                      f"phase: {loss_phase_sum.item() / self.num_imgs:e}")
+            if self.centroid_params:
+                print(f"Loss centroid: {loss_centroid_sum.item() / self.num_imgs:e}")
+            print("Loss prior: {}".format(loss_prior_sum.item() / self.num_imgs))
+            if self.no_entropy == False:
+                print("Loss entropy: {}".format(loss_ent_sum.item() / self.num_imgs))
+            else:
+                print("Loss entropy: {}".format(loss_ent_sum / self.num_imgs))
+            print("-----------------------------")
+            if ((k < 500) and (k % 100 == 0)) or ((k >= 500) and (k % 1000 == 0)):
+                if 'multi' in self.task:
+                    img_indices = [i for i in range(self.num_imgs_show // 2)]
+                    img_indices += [self.num_imgs // 2 + i for i in range(self.num_imgs_show)]
+                else:
+                    img_indices = range(self.num_imgs_show)
+                # print("passed before avg_img_list")
+
+                avg_img_list = [self.get_avg_std_img(self.models[i])[0] \
+                    for i in img_indices]
+                std_img_list = [self.get_avg_std_img(self.models[i])[1] \
+                    for i in img_indices]
+                # print(f'avg_img_list len={len(avg_img_list)}')
+                # print(f'std_img_list len={len(std_img_list)}')
+                # print("passed all avg_img_list")
+                
+                self.plot_results(self.models, self.generator_func, self.true_imgs, org_targets, self.num_channels,
+                              self.image_size, self.num_imgs_show, self.num_imgs,
+                              self.sigma, avg_img_list, std_img_list, self.save_img, str(k),
+                              self.dropout_val, self.layer_size, self.num_layer_decoder,
+                              self.batchGD, self.dataset, self.folder, self.sup_folder, self.GMM_EPS,
+                              self.task, self.latent_model, self.generator_type, envelope_params=self.envelope_params,
+                              loc_shift=loc_shift, prob_locations=prob_locations)
+
+    def get_statistics(self, loss_data_list, loss_prior_list, loss_list, loss_mag_list, loss_phase_list,
+                        loss_centroid_list, loss_ent_list, loss_mean_true_list, org_targets, org_models):
+           
         plt.figure()
-        plt.plot(loss_mean_true_list, label=f"loss")
+        plt.plot(loss_mean_true_list, label="loss")
         plt.legend()
         plt.xlabel('epochs')
         plt.ylabel('|mu-x|/num_pixels')
@@ -834,14 +856,33 @@ class Trainer():
         if self.centroid_params:
             np.save(f'./{self.sup_folder}/{self.folder}/loss_centroid.npy', loss_centroid_list)
     
-        self.plot_results(org_models, self.generator_func, self.true_imgs, org_targets, self.num_channels,
-                     self.image_size, self.num_imgs_show, self.num_imgs,
-                     self.sigma, avg_img_list[:self.num_imgs_show], std_img_list[:self.num_imgs_show], self.save_img, str(k),
-                     self.dropout_val, self.layer_size, self.num_layer_decoder,
-                     self.batchGD, self.dataset, self.folder, self.sup_folder, self.GMM_EPS,
-                     self.task, self.latent_model, self.generator_type, envelope_params=self.envelope_params,
-                     loc_shift=loc_shift, prob_locations=prob_locations)
+        # Kerens
+        b_sz = len(next(iter(self.train_data))[0])
+        print(f'#loss points {len(loss_list)}')
+        np.save(f'./{self.sup_folder}/{self.folder}/loss_ddp_{self.num_imgs}im_{b_sz}bs_{self.num_epochs}epochs_{self.world_size}gpus_{self.suffix}.npy', loss_list)
+        plt.figure()
+        plt.plot(loss_list)
+        plt.savefig(f'./{self.sup_folder}/{self.folder}/loss_ddp_{self.num_imgs}im_{b_sz}bs_{self.num_epochs}epochs_{self.world_size}gpus_{self.suffix}.png')
+        plt.close()
 
+
+    def get_mu_loss(self):
+        mean_true_diff = 0
+        #I think this should be changed...
+        for i in range(self.num_imgs):
+            avg = self.get_avg_std_img(self.models[i], 1)[0]
+            mean_true_diff_val = torch.abs(torch.sum(avg - self.true_imgs[i], (-1, -2))) / torch.norm(self.true_imgs[i])
+            mean_true_diff_val = mean_true_diff_val.detach().cpu().numpy()[0][0]
+            mean_true_diff += mean_true_diff_val
+            #print(f'{i} mean_true_diff_val={mean_true_diff_val}')
+        return mean_true_diff / self.num_imgs
+    
+        
+        
+        
+      
+        
+        
     def plot_results(self, models, generator, true_imgs, noisy_imgs, num_channels,
                      image_size, num_imgs_show, num_imgs,
                      sigma, avg_img_list, std_img_list, save_img, epoch,
@@ -880,7 +921,7 @@ class Trainer():
             true = true_imgs[ii].detach().cpu().numpy().reshape([num_channels, image_size, image_size])
             true = true[0,:,:].reshape([image_size, image_size])
             if 'denoising' in task and ii < num_imgs_show:
-                noisy = noisy_imgs[ii].detach().cpu().numpy().reshape([num_channels, image_size, image_size])
+                noisy = self.targets[ii].detach().cpu().numpy().reshape([num_channels, image_size, image_size])
                 noisy = noisy[0,:,:].reshape([image_size, image_size])
             else:
                 noisy = np.zeros([image_size, image_size])
@@ -966,25 +1007,25 @@ class Trainer():
             plt.close()
 
             if 'multi' in task:
-                for i in range(len(noisy_imgs)//2):
+                for i in range(len(self.targets)//2):
                     np.save(f"./{sup_folder}/{folder}/noisy_imgs_1.npy",
-                            [noisy_imgs[i].detach().cpu().numpy() for i in range(len(noisy_imgs)//2)])
-                for i in range(len(noisy_imgs)//2,):
+                            [self.targets[i].detach().cpu().numpy() for i in range(len(self.targets)//2)])
+                for i in range(len(self.targets)//2,):
                     np.save(f"./{sup_folder}/{folder}/noisy_imgs_2.npy",
-                            [noisy_imgs[i].detach().cpu().numpy() for i in range(len(noisy_imgs)//2,)])
+                            [self.targets[i].detach().cpu().numpy() for i in range(len(self.targets)//2,)])
             else:
                 if dataset not in ("sagA_video", "m87", "sagA"):
                     np.save(f"./{sup_folder}/{folder}/noisy_imgs.npy",
-                            [noisy_imgs[i].detach().cpu().numpy() for i in range(len(noisy_imgs))])
+                            [self.targets[i].detach().cpu().numpy() for i in range(len(self.targets))])
                 elif task == 'closure-phase':
                     noisy_imgs_ = [(x[0].detach().cpu().numpy(), x[1].detach().cpu().numpy())
-                                   for x in noisy_imgs]
+                                   for x in self.targets]
                     noisy_imgs_ = [item for sublist in noisy_imgs_ for item in sublist]
                     np.savez(f"./{sup_folder}/{folder}/noisy_imgs.npz",
                              *[noisy_imgs_[i] for i in range(len(noisy_imgs_))])
                 else:
                     np.savez(f"./{sup_folder}/{folder}/noisy_imgs.npz",
-                            *[noisy_imgs[i].detach().cpu().numpy() for i in range(len(noisy_imgs))])
+                            *[self.targets[i].detach().cpu().numpy() for i in range(len(self.targets))])
             np.save(f"./{sup_folder}/{folder}/true_imgs.npy", [true_imgs[i].detach().cpu().numpy() for i in range(len(true_imgs))])
 
             if prob_locations is not None:

@@ -24,7 +24,8 @@ from torch.distributed import init_process_group, destroy_process_group
 from torch.utils.data import Dataset, DataLoader
 import time
 # Globals
-DEBUG = False
+DEBUG = True
+import random
 
 class MyDataset(Dataset):
     
@@ -40,16 +41,16 @@ class MyDataset(Dataset):
         L = self.tensor_list[idx][1] #torch.Size([40, 40])
         target = self.noisy_targets[idx]
         
-        mu = mu.to('cpu')
-        L = L.to('cpu')
-        target = target.to('cpu')
+        mu = mu.to('cuda')
+        L = L.to('cuda')
+        target = target.to('cuda')
         return torch.cat([mu, L], dim=0), target
 
-def ddp_setup(rank, world_size):
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "12532" #any free port
-    init_process_group(backend="nccl", rank=rank, world_size=world_size)
-    torch.cuda.set_device(rank)
+# def ddp_setup(rank, world_size):
+#     os.environ["MASTER_ADDR"] = "localhost"
+#     os.environ["MASTER_PORT"] = "12532" #any free port
+#     init_process_group(backend="nccl", rank=rank, world_size=world_size)
+#     torch.cuda.set_device(rank)
 
 def get_sigmas(args):
     if 'multi' in args.task and 'compressed-sensing' in args.task:
@@ -104,15 +105,15 @@ def prepare_dataloader(dataset: Dataset, batch_size: int):
     return DataLoader(
         dataset=dataset,
         batch_size=batch_size,
-        pin_memory=True,
-        shuffle=False,
-        sampler=DistributedSampler(dataset)
+        pin_memory=False,
+        shuffle=False
+        # sampler=DistributedSampler(dataset)
     )
 
 
 def main_function(rank, args):
     # Apply ddp setup
-    ddp_setup(rank, args.nproc)
+    # ddp_setup(rank, args.nproc)
 
     true, noisy, A, sigma, kernels, models,\
     dataset, generator, G, optimizer = load_train_objs(rank, args)
@@ -129,30 +130,20 @@ def main_function(rank, args):
                       models=models, generator_func=G,
                       args=args)
     # Get start time
-    if trainer.gpu_id not in [-1, 0]:
-        dist.barrier()
     # Only gpu 0 operating now...
-    if trainer.gpu_id == 0:
-        print(f"Running {os.path.basename(__file__)}"
-              f" with {args.nproc} gpus, "
-              f"{args.num_epochs} total epochs, "
-              f"{args.num_imgs} images, "
-              f"{args.batch_size} batch size, "
-              f"save checkpoint every {args.save_every} epochs")
-        start_time = time.time()
-        dist.barrier()
+    print(f"Running {os.path.basename(__file__)}"
+          f" with {args.nproc} gpus, "
+          f"{args.num_epochs} total epochs, "
+          f"{args.num_imgs} images, "
+          f"{args.batch_size} batch size, "
+          f"save checkpoint every {args.save_every} epochs")
+    start_time = time.time()
+
     # Learn the IGM
     trainer.train_latent_gmm_and_generator()
     # Get end time
-    if trainer.gpu_id not in [-1, 0]:
-         dist.barrier()
-
-    if trainer.gpu_id == 0:
-    # Only gpu 0 operating now...
-        end_time = time.time()
-        print(f"Time taken to train in {os.path.basename(__file__)}: {end_time - start_time} seconds")
-        dist.barrier()
-    destroy_process_group()
+    end_time = time.time()
+    print(f"Time taken to train in {os.path.basename(__file__)}: {end_time - start_time} seconds")
 
 
 
@@ -283,6 +274,27 @@ if __name__ == "__main__":
     if DEBUG is True:
         debug.set_args(args)
 
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    random.seed(args.seed)
+   
+    GPU = torch.cuda.is_available()
+    if GPU == True:
+        torch.backends.cudnn.enabled = True
+        torch.backends.cudnn.benchmark = True
+        dtype = torch.cuda.FloatTensor
+        print("num GPUs",torch.cuda.device_count())
+    else:
+        dtype = torch.FloatTensor
+    import os,sys,inspect
+    currentdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
+    parentdir = os.path.dirname(currentdir)
+    sys.path.insert(0,parentdir)
+   
+    
     # ddp setup
     # rank is the device
     if args.batch_size is None:
@@ -366,4 +378,4 @@ if __name__ == "__main__":
         for i in range(args.num_imgs):
             args.sigma.append(torch.tensor(sigma['arr_0'][i][np.newaxis, :, np.newaxis]))#.to(device))
 
-    mp.spawn(main_function, args=(args,), nprocs=args.nproc)
+    main_function(device, args)
