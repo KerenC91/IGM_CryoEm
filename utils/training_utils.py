@@ -88,8 +88,7 @@ def get_gmm_gen_params(models, generator, num_imgs, model_type, eps_fixed):
     params += generator.parameters()
     return params
 
-def get_avg_std_img(model, generator, latent_model, latent_dim, GMM_EPS, image_size, generator_type):
-    nimg = 40
+def get_avg_std_img(model, generator, latent_model, latent_dim, GMM_EPS, image_size, generator_type, nimg = 40):   
 #     if latent_model == 'flow':
 
     if (latent_model == 'gmm') or (latent_model == "gmm_eye"):
@@ -366,6 +365,7 @@ def train_latent_gmm_and_generator(models,
         loss_mag_sum = 0
         loss_phase_sum = 0
         loss_centroid_sum = 0
+        avg_org_diff = 0
         optimizer.zero_grad()
         if 'multi' in task:
             for i in range(num_imgs//2):
@@ -502,7 +502,7 @@ def train_latent_gmm_and_generator(models,
                     mu, L = models[i]
                     spread_cov = (L@(L.t())).to(device) + torch.diag(torch.ones(latent_dim)).to(device)*(GMM_EPS)
                     prior = GMM_Custom(mu, L, GMM_EPS, device, latent_dim, validate_args=validate_args)
-                
+                avg_org_diff += np.abs(torch.sum(generator_func(mu.unsqueeze(0)) - true_imgs[i], (-1, -2)).item()) / torch.norm(true_imgs[i]).item()
                 z_sample = prior.sample((num_samples,)).to(device)
                 
                 if generator_type == "norm_flow":
@@ -576,6 +576,7 @@ def train_latent_gmm_and_generator(models,
             loss_list.append(loss_sum.item() / num_imgs)
             loss_data_list.append(loss_data_sum.item() / num_imgs)
             loss_prior_list.append(loss_prior_sum.item() / num_imgs)
+            loss_mean_true_lists.append(avg_org_diff / num_imgs)
         else:
             loss_list.append(loss_sum.item())
             loss_data_list.append(loss_data_sum.item())
@@ -620,21 +621,9 @@ def train_latent_gmm_and_generator(models,
                 std_img_list = [get_avg_std_img(models[i], generator_func, 
                                                 latent_model, latent_dim, GMM_EPS, 
                                                 image_size, generator_type)[1] for i in img_indices]
-                #vall = torch.sum(avg_img_list[0] - true_imgs[0], (-1, -2)) / (image_size * image_size)
-                #shapee =torch.sum(avg_img_list[0] - true_imgs[0], (-1, -2)).size()
-                #print(f"keren shape={shapee}, val={vall}")
-                mean_true_diff_list = [
-                    np.abs(torch.sum(avg_img_list[i] - true_imgs[i], (-1, -2)).item()) / torch.norm(true_imgs[i]).item() 
-                    for i in img_indices
-                    ]
-                
-                for i in img_indices:
-                    loss_mean_true_lists[i].append(mean_true_diff_list[i])
-                
-                
+                              
                 plt.figure()
-                for i in img_indices:
-                    plt.plot(loss_mean_true_lists[i], label=f"model {i+1}")
+                plt.plot(loss_mean_true_lists)
                 plt.legend()
                 plt.xlabel('epochs')
                 plt.ylabel('|mu-x|/num_pixels')
