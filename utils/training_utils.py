@@ -295,7 +295,7 @@ def train_latent_gmm_and_generator(models,
 
     loss_list = []
     loss_data_list = []
-    loss_mean_true_lists = [[] for i in range(num_imgs_show)]
+    loss_mean_true_lists = []
     loss_prior_list = []
     loss_ent_list = []
     loss_mag_list = []
@@ -624,13 +624,11 @@ def train_latent_gmm_and_generator(models,
                               
                 plt.figure()
                 plt.plot(loss_mean_true_lists)
-                plt.legend()
                 plt.xlabel('epochs')
                 plt.ylabel('|mu-x|/num_pixels')
                 plt.title('loss of mean vs true images')
                 plt.savefig(f'./{sup_folder}/{folder}/loss mean true.png')
                 plt.close()
-
 
                 plt.figure()
                 plt.plot(loss_list)

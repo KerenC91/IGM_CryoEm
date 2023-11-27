@@ -50,7 +50,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3"
 torch.cuda.set_device(2)
 torch.cuda.empty_cache()
 
-DEBUG = True
+DEBUG = False
 
 def main_function(args):
 
