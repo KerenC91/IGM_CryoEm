@@ -43,7 +43,7 @@ class MyDataset(Dataset):
         mu = mu.to('cpu')
         L = L.to('cpu')
         target = target.to('cpu')
-        return torch.cat([mu, L], dim=0), target
+        return torch.cat([mu, L], dim=0), idx, target
 
 def ddp_setup(rank, world_size):
     os.environ["MASTER_ADDR"] = "localhost"
@@ -94,11 +94,9 @@ def load_train_objs(rank, args):
     models = model_utils.get_latent_model(rank, args.latent_dim, args.num_imgs, args.latent_type)
     #I have to convert models to be a Dataset, as in from torch.utils.data import Dataset
     dataset = MyDataset(models, noisy)
-    params = training_utils.get_gmm_gen_params(models, generator, args.num_imgs, args.latent_type, args.eps_fixed)
-    optimizer = torch.optim.Adam(params, lr=args.lr)
 
     return true, noisy, A, sigma, kernels, models,\
-        dataset, generator, G, optimizer
+        dataset, generator, G
 
 def prepare_dataloader(dataset: Dataset, batch_size: int):
     return DataLoader(
@@ -115,7 +113,7 @@ def main_function(rank, args):
     ddp_setup(rank, args.nproc)
 
     true, noisy, A, sigma, kernels, models,\
-    dataset, generator, G, optimizer = load_train_objs(rank, args)
+    dataset, generator, G = load_train_objs(rank, args)
     
     # if rank == 0:
     #     for i in range(args.num_imgs):
@@ -123,7 +121,7 @@ def main_function(rank, args):
         
     # kernels parameter unused
     train_data = prepare_dataloader(dataset, args.batch_size)
-    trainer = Trainer(generator=generator, train_data=train_data, optimizer=optimizer, gpu_id=rank,
+    trainer = Trainer(generator=generator, train_data=train_data, gpu_id=rank,
                       snapshot_path=f'./{args.sup_folder}/{args.folder}/snapshot.pt',
                       sigma=sigma, targets=noisy, true_imgs=true, As=A,
                       models=models, generator_func=G,

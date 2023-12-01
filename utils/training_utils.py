@@ -48,6 +48,8 @@ def get_gmm_gen_params(models, generator, num_imgs, model_type, eps_fixed):
                 params += [models[kk][2]]
     params += generator.parameters()
     return params
+
+
 class GMM_Custom(torch.distributions.MultivariateNormal):
     def __init__(self, mu, L, eps, device, latent_dim, **kwargs):
         C = (L@(L.t())).to(device) + torch.diag(torch.ones(latent_dim)).to(device)*(eps)
@@ -76,7 +78,6 @@ class Trainer():
             self,
             generator,
             train_data,
-            optimizer,
             gpu_id,
             snapshot_path,
             sigma,
@@ -93,7 +94,6 @@ class Trainer():
         if isinstance(gpu_id, int):
             self.generator = DDP(generator, device_ids=[gpu_id])
         self.train_data = train_data
-        self.optimizer = optimizer
         self.save_every = args.save_every
         self.num_imgs = args.num_imgs
         self.suffix = args.suffix
@@ -140,6 +140,9 @@ class Trainer():
         self.validate_args = args.validate_args         # False
         self.normalize_loss = args.normalize_loss       # False
         torch.set_default_dtype(torch.float32)
+        self.params = get_gmm_gen_params(self.models, self.generator, \
+                                         self.num_imgs, self.latent_model, self.eps_fixed)
+        self.optimizer = optim.Adam(self.params, lr=self.lr)
 
     def get_latent_model(self):
         list_of_models = [[torch.randn((self.latent_dim,)).to(self.device),
@@ -324,8 +327,8 @@ class Trainer():
                 latent_model_ = np.load(latent_model_path)
                 self.models.append([Tensor(latent_model_[f]).to(self.device) for f in latent_model_.files])
 
-            params = self.get_gmm_gen_params(self.models, self.generator, self.num_imgs, self.latent_model, self.eps_fixed)
-            self.optimizer = optim.Adam(params, lr=self.lr)
+            self.params = get_gmm_gen_params(self.models, self.generator, self.num_imgs, self.latent_model, self.eps_fixed)
+            self.optimizer = optim.Adam(self.params, lr=self.lr)
             self.optimizer.load_state_dict(last_optimizer_sd)
 
             for (loss_checkpt_file, loss_checkpt_list) in [
@@ -380,7 +383,7 @@ class Trainer():
         if learn_locshift:
             prob_locations = (1 / self.image_size) ** 2 * torch.ones(self.image_size * self.image_size)
             prob_locations = Variable(prob_locations, requires_grad=True)
-            params.append(prob_locations) # seems like a bug, since unused
+            self.params.append(prob_locations) # seems like a bug, since unused
         else:
             prob_locations = None
         return loss_centroid_fit, phase_anneal, centroid_anneal, centroid_loss_wt, loc_shift, learn_locshift, prob_locations, use_envelope
@@ -512,121 +515,133 @@ class Trainer():
         if k % 50 == 0:
             print(f"[GPU{self.gpu_id}] Epoch {k} | Batchsize: {b_sz} | Steps: {len(self.train_data)}")
         i = 0
-        for models, targets in self.train_data:
-            models = models.to(self.gpu_id)
-            targets = targets.to(self.gpu_id)
-            # if self.gpu_id == 0:
-            #     filename = f'./figures/target_train_{i}.png'
-            #     plt.imshow(targets.cpu().numpy().squeeze())
-            #     plt.figure().savefig(filename)
-            #     i+=1
-            # print('inside train_latent_gmm_and_generator')
-            # print('targets')
-            # print(f'{targets}')
-            # print('models')
-            # print(f'{models}')
-            if self.batchGD == False:
-                self.optimizer.zero_grad()
-            #target = targets[0]
-            #model = models[0]
+        for models, idx, targets in self.train_data:
+            print(f'gpu{self.gpu_id}, idx={idx}')
+            for j in idx:
+                ind = j.item()
+                model = self.models[ind]#.to(self.gpu_id)
+                target = self.targets[ind].to(self.gpu_id)
+                # if self.gpu_id == 0:
+                #     filename = f'./figures/target_train_{i}.png'
+                #     plt.imshow(targets.cpu().numpy().squeeze())
+                #     plt.figure().savefig(filename)
+                #     i+=1
+                # print('inside train_latent_gmm_and_generator')
+                # print('targets')
+                # print(f'{targets}')
+                # print('models')
+                # print(f'{models}')
+                if self.batchGD == False:
+                    self.optimizer.zero_grad()
+                #target = targets[0]
+                #model = models[0]
 
             #                 mu, L = models[i]
             #                 spread_cov = (L@(L.t())).to(device) + torch.diag(torch.ones(latent_dim)).to(device)*(GMM_EPS)
             #                 prior = torch.distributions.MultivariateNormal(mu, spread_cov)
 
-            if (self.latent_model == 'gmm') or (self.latent_model == "gmm_eye"):
-                if b_sz == 1:
-                    mu, L = torch.split(models, [1, self.latent_dim], dim=1)
-                    mu = mu.squeeze(0).squeeze(0)
-                    L = L.squeeze(0)
+                if (self.latent_model == 'gmm') or (self.latent_model == "gmm_eye"):
+                    # if b_sz == 1:
+                    #     mu, L = torch.split(models, [1, self.latent_dim], dim=1)
+                    #     mu = mu.squeeze(0).squeeze(0)
+                    #     L = L.squeeze(0)
+                    #     spread_cov = (L @ (L.t())).to(self.device) + torch.diag(torch.ones(self.latent_dim)).to(self.device) * (self.GMM_EPS)
+                    #     prior = torch.distributions.MultivariateNormal(mu, spread_cov, validate_args=self.validate_args)
+                    # else:
+                    #     prior = []
+                    #     for ind in idx:
+                    #     # mu, L = torch.split(models, [1, self.latent_dim], dim=1)
+                    #     # mu = mu.squeeze(1)
+                    #     # L_T = torch.transpose(L, 1, 2)
+                    #     # diagonal_ones = torch.diag(torch.ones(self.latent_dim))
+                    #     # expanded_diagonal_ones = diagonal_ones.unsqueeze(0).expand(b_sz, self.latent_dim, self.latent_dim)
+                    #     # spread_cov = (L @ (L_T)).to(self.device) + expanded_diagonal_ones.to(self.device) * (self.GMM_EPS)
+                    #     # prior = torch.distributions.MultivariateNormal(mu, spread_cov, validate_args=self.validate_args)
+                    #mu, L = torch.split(models[ind], [1, self.latent_dim], dim=0)
+                    mu, L = model[0].to(self.device), model[1].to(self.device)
+                    #mu = mu.squeeze(0)
                     spread_cov = (L @ (L.t())).to(self.device) + torch.diag(torch.ones(self.latent_dim)).to(self.device) * (self.GMM_EPS)
-                else:
-                    mu, L = torch.split(models, [1, self.latent_dim], dim=1)
-                    mu = mu.squeeze(1)
-                    L_T = torch.transpose(L, 1, 2)
-                    diagonal_ones = torch.diag(torch.ones(self.latent_dim))
-                    expanded_diagonal_ones = diagonal_ones.unsqueeze(0).expand(b_sz, self.latent_dim, self.latent_dim)
-                    spread_cov = (L @ (L_T)).to(self.device) + expanded_diagonal_ones.to(self.device) * (self.GMM_EPS)
-                prior = torch.distributions.MultivariateNormal(mu, spread_cov, validate_args=self.validate_args)
-            elif (self.latent_model == 'gmm_low') or (self.latent_model == "gmm_low_eye"):
-                mu, L, eps = models[i]
-                #                     print(eps*eps)
-                prior = torch.distributions.LowRankMultivariateNormal(mu, L, eps * eps + 1e-6,
-                                                                      validate_args=self.validate_args)
-            elif (self.latent_model == "gmm_custom"):
-                mu, L = models[i]
-                spread_cov = (L @ (L.t())).to(self.device) + torch.diag(torch.ones(self.latent_dim)).to(self.device) * (self.GMM_EPS)
-                prior = GMM_Custom(mu, L, self.GMM_EPS, self.device, self.latent_dim, validate_args=self.validate_args)
+                    prior = torch.distributions.MultivariateNormal(mu, spread_cov, validate_args=self.validate_args)
 
-            z_sample = prior.sample((self.num_samples,)).to(self.device)
+                elif (self.latent_model == 'gmm_low') or (self.latent_model == "gmm_low_eye"):
+                    mu, L, eps = models[i]
+                    #                     print(eps*eps)
+                    prior = torch.distributions.LowRankMultivariateNormal(mu, L, eps * eps + 1e-6,
+                                                                          validate_args=self.validate_args)
+                elif (self.latent_model == "gmm_custom"):
+                    mu, L = models[i]
+                    spread_cov = (L @ (L.t())).to(self.device) + torch.diag(torch.ones(self.latent_dim)).to(self.device) * (self.GMM_EPS)
+                    prior = GMM_Custom(mu, L, self.GMM_EPS, self.device, self.latent_dim, validate_args=self.validate_args)
 
-            if self.generator_type == "norm_flow":
-                img, logdet = self.generator_func(z_sample)
-                img = img.reshape([self.num_samples, self.image_size, self.image_size])
-            else:
-                if b_sz == 1:
-                    img = self.generator_func(z_sample)
-                else:
-                    img = torch.zeros(b_sz, 12, 1, self.image_size, self.image_size)
-                    for j in range(b_sz):
-                        img[j] = self.generator_func(z_sample[:, j, :].squeeze(1))
-                #[:, 0, :]
-                # img = self.generator_func(z_sample)
-            # print(img.shape, z_sample.shape, img.shape)
-
-            if self.no_entropy == True:
-                log_ent = 0
-            else:
+                z_sample = prior.sample((self.num_samples,)).to(self.device)
+    
                 if self.generator_type == "norm_flow":
-                    log_ent = prior.log_prob(z_sample)  # + logdet
+                    img, logdet = self.generator_func(z_sample)
+                    img = img.reshape([self.num_samples, self.image_size, self.image_size])
                 else:
-                    log_ent = prior.log_prob(z_sample)
+                    # if b_sz == 1:
+                    img = self.generator_func(z_sample)
+                    # else:
+                    #     img = torch.zeros(b_sz, 12, 1, self.image_size, self.image_size)
+                    #     for j in range(b_sz):
+                    #         img[j] = self.generator_func(z_sample[:, j, :].squeeze(1))
+                    #[:, 0, :]
+                    # img = self.generator_func(z_sample)
+                # print(img.shape, z_sample.shape, img.shape)
+    
+                if self.no_entropy == True:
+                    log_ent = 0
+                else:
+                    if self.generator_type == "norm_flow":
+                        log_ent = prior.log_prob(z_sample)  # + logdet
+                    else:
+                        log_ent = prior.log_prob(z_sample)
+    
+                loss_prior = 0.5 * torch.sum(z_sample ** 2, 1)
+    
+                if loc_shift is not None:
+                    filters, envelope = loc_shift
+                    if learn_locshift:
+                        samples = WeightedRandomSampler(prob_locations, img.shape[0], replacement=True)
+                        samples = list(samples)
+                        filters = filters[samples]
+    
+                    img = envelope * img
+                    img = functional.conv2d(filters.transpose(0, 1), img.flip((3)).flip((2)),
+                                            padding='same', groups=filters.shape[0]).transpose(0, 1)
+                #img = 
+                loss_data = self.loss_data_fit(img, target, self.sigma, self.As, self.task, idx=i, dataset=self.dataset,
+                                          gamma=self.gamma, cp_scale=self.cphase_scale * phase_anneal[k],
+                                          use_envelope=use_envelope)
 
-            loss_prior = 0.5 * torch.sum(z_sample ** 2, 1)
+                # if normalize_loss:
+                # loss_prior = torch.divide(loss_prior, latent_dim)
+                # loss_data = torch.divide(loss_data, image_size * image_size)
+    
+                if 'closure-phase' in self.task:
+                    loss_data, loss_mag, loss_phase = loss_data
+    
+                if self.centroid_params:
+                    loss_centroid = centroid_anneal[k] * centroid_loss_wt * loss_centroid_fit(img)
+                    loss = torch.mean(loss_data + log_ent + loss_prior + loss_centroid)
+                else:
+                    loss = torch.mean(loss_data + log_ent + loss_prior)
 
-            if loc_shift is not None:
-                filters, envelope = loc_shift
-                if learn_locshift:
-                    samples = WeightedRandomSampler(prob_locations, img.shape[0], replacement=True)
-                    samples = list(samples)
-                    filters = filters[samples]
-
-                img = envelope * img
-                img = functional.conv2d(filters.transpose(0, 1), img.flip((3)).flip((2)),
-                                        padding='same', groups=filters.shape[0]).transpose(0, 1)
-            #img = 
-            loss_data = self.loss_data_fit(img, targets, self.sigma, self.As, self.task, idx=i, dataset=self.dataset,
-                                      gamma=self.gamma, cp_scale=self.cphase_scale * phase_anneal[k],
-                                      use_envelope=use_envelope)
-
-            # if normalize_loss:
-            # loss_prior = torch.divide(loss_prior, latent_dim)
-            # loss_data = torch.divide(loss_data, image_size * image_size)
-
-            if 'closure-phase' in self.task:
-                loss_data, loss_mag, loss_phase = loss_data
-
-            if self.centroid_params:
-                loss_centroid = centroid_anneal[k] * centroid_loss_wt * loss_centroid_fit(img)
-                loss = torch.mean(loss_data + log_ent + loss_prior + loss_centroid)
-            else:
-                loss = torch.mean(loss_data + log_ent + loss_prior)
-
-            loss_sum = loss_sum + loss
-            loss_data_sum = loss_data_sum + torch.mean(loss_data)
-            loss_prior_sum = loss_prior_sum + torch.mean(loss_prior)
-
-            if 'closure-phase' in self.task:
-                loss_mag_sum += torch.mean(loss_mag)
-                loss_phase_sum += torch.mean(loss_phase)
-            if self.centroid_params:
-                loss_centroid_sum += torch.mean(loss_centroid)
-            if self.no_entropy == False:
-                loss_ent_sum = loss_ent_sum + torch.mean(log_ent)
-
-            if self.batchGD == False:
-                loss.backward(retain_graph=True)
-                self.optimizer.step()
+                loss_sum = loss_sum + loss
+                loss_data_sum = loss_data_sum + torch.mean(loss_data)
+                loss_prior_sum = loss_prior_sum + torch.mean(loss_prior)
+    
+                if 'closure-phase' in self.task:
+                    loss_mag_sum += torch.mean(loss_mag)
+                    loss_phase_sum += torch.mean(loss_phase)
+                if self.centroid_params:
+                    loss_centroid_sum += torch.mean(loss_centroid)
+                if self.no_entropy == False:
+                    loss_ent_sum = loss_ent_sum + torch.mean(log_ent)
+    
+                if self.batchGD == False:
+                    loss.backward(retain_graph=True)
+                    self.optimizer.step()
             i += 1
         if self.batchGD == True:
             loss_sum.backward(retain_graph=True)
@@ -725,7 +740,7 @@ class Trainer():
                     dist.all_reduce(loss_phase_sum, op=dist.ReduceOp.SUM)
                 if self.centroid_params:
                     dist.all_reduce(loss_centroid_sum, op=dist.ReduceOp.SUM)
-            
+
             if self.gpu_id == 0 or (isinstance(self.gpu_id, int) != True):
                 if self.normalize_loss:
                     # might be different normalization
@@ -749,13 +764,13 @@ class Trainer():
                 else:
                     loss_ent_list.append(loss_ent_sum)
                 
-                mean_true_diff_loss = self.get_mu_loss()
-                loss_mean_true_list.append(mean_true_diff_loss)
+                # mean_true_diff_loss = self.get_mu_loss()
+                # loss_mean_true_list.append(mean_true_diff_loss)
                 
-                self.plot_epoch_results(k, loss_sum, loss_data_sum, loss_prior_sum,
-                        loss_ent_sum, loss_mag_sum, loss_phase_sum, loss_centroid_sum,
-                        self.targets, self.models, loc_shift, prob_locations)
-                        
+                # self.plot_epoch_results(k, loss_sum, loss_data_sum, loss_prior_sum,
+                #         loss_ent_sum, loss_mag_sum, loss_phase_sum, loss_centroid_sum,
+                #         self.targets, self.models, loc_shift, prob_locations)
+    
             if self.gpu_id == 0 and k % self.save_every == 0:
                 self._save_checkpoint(k)
                 self.checkpoint_results(self.latent_dim, self.generator_func, self.models, str(k), self.num_imgs,
@@ -797,9 +812,13 @@ class Trainer():
                     img_indices = range(self.num_imgs_show)
                 # print("passed before avg_img_list")
 
-                avg_img_list = [self.get_avg_std_img(self.models[i])[0] \
+                # avg_img_list = [self.get_avg_std_img(self.models[i])[0] \
+                #     for i in img_indices]
+                # std_img_list = [self.get_avg_std_img(self.models[i])[1] \
+                #     for i in img_indices]
+                avg_img_list = [torch.zeros(1, 1, 64).to(self.gpu_id) \
                     for i in img_indices]
-                std_img_list = [self.get_avg_std_img(self.models[i])[1] \
+                std_img_list = [torch.zeros(1, 1, 64).to(self.gpu_id) \
                     for i in img_indices]
                 # print(f'avg_img_list len={len(avg_img_list)}')
                 # print(f'std_img_list len={len(std_img_list)}')
@@ -870,7 +889,8 @@ class Trainer():
         mean_true_diff = 0
         #I think this should be changed...
         for i in range(self.num_imgs):
-            avg = self.get_avg_std_img(self.models[i], 1)[0]
+            mu, L = torch.split(self.models[i], [1, self.latent_dim], dim=1)
+            avg = self.generator_func(mu.unsqueeze(0)) 
             mean_true_diff_val = torch.abs(torch.sum(avg - self.true_imgs[i], (-1, -2))) / torch.norm(self.true_imgs[i])
             mean_true_diff_val = mean_true_diff_val.detach().cpu().numpy()[0][0]
             mean_true_diff += mean_true_diff_val
