@@ -135,8 +135,9 @@ def main_function(rank, args):
               f" with {args.nproc} gpus, "
               f"{args.num_epochs} total epochs, "
               f"{args.num_imgs} images, "
-              f"{args.batch_size} batch size, "
+              f"{args.batch_size}={len(next(iter(train_data))[0])} batch size, "
               f"save checkpoint every {args.save_every} epochs")
+        print(f"Normalization factor={(trainer.world_size * trainer.batch_size * len(trainer.train_data))}")
         start_time = time.time()
         dist.barrier()
     # Learn the IGM
