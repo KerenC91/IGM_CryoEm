@@ -18,7 +18,7 @@ def set_args(args: Namespace):
     args.latent_dim = 40
     args.generator_type = 'deepdecoder'
     args.num_imgs = 5
-    args.dataset = 'MNIST'
+    args.dataset = 'cryo'#'MNIST'
     args.sigma = 0.5
     args.image_size = 64
     args.batchGD = True

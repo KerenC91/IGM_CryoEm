@@ -47,6 +47,51 @@ from .vis_utils import true_image_path, true_obs_list, obs_params, object_from_d
 
 kwargs = {}#{'num_workers': 1, 'pin_memory': True} if device == 'cuda' else {}
 
+class CryoDataset(Dataset):    
+    def __init__(self, num_imgs, image_size=64, transform=None, 
+                    data_path='/home/kerencohen2/Git/IGM_CryoEm/data/particles/MRC_0601/10028/data/Particles/MRC_0601'):
+        self.num_imgs = num_imgs
+        self.transform=transforms.Compose([transforms.ToTensor(), transforms.Resize(size=(image_size,image_size))])
+        self.data_path = data_path
+        self.mrcs_files = [f for f in os.listdir(self.data_path) \
+                               if f.endswith(".mrcs")][:self.num_imgs]
+        self.data = self._load_data()
+
+    def _load_data(self):
+        data = []
+        for image_file in self.mrcs_files:
+            im_bulk = aspire.image.load_mrc(os.path.join(self.data_path, image_file))
+            for _ in im_bulk.shape[0]:
+                im = torch.tensor(im_bulk[0])
+                data.append(im)
+                if len(data) == self.num_imgs:
+                    return data
+
+        return data  
+
+    def __getitem__(self, index: int):
+        """
+        Args:
+            index (int): Index
+
+        Returns:
+            tuple: image
+        """
+        img = self.data[index]
+
+        # doing this so that it is consistent with all other datasets
+        # to return a PIL Image
+        img = Image.fromarray(img, mode="L")
+
+        if self.transform is not None:
+            img = self.transform(img)
+
+        return img
+
+    def __len__(self) -> int:
+        return len(self.data)
+
+    
 ## Create a custom Dataset class
 class CelebADataset(Dataset):
     def __init__(self, root_dir, transform=None):
@@ -452,26 +497,42 @@ def get_true_and_noisy_data(device,
         x_01 = (x - x.min())/(x - x.min()).max()
         test_imgs = TensorDataset(Tensor(x_01),torch.ones([x.shape[0],1]))
     elif dataset == "cryo":#empiar10028
-        test_imgs = [] #make it with lots of attributes such as in MNIST!!!
-        data_path = '/home/kerencohen2/Git/IGM_CryoEm/data/particles/MRC_0601/10028/data/Particles/MRC_0601'
+        # data_set = CryoDataset()
+        # # Create a dataloader
+        # dataloader = torch.utils.data.DataLoader(data_set,
+        #                             batch_size=1, 
+        #                             pin_memory=False,
+        #                             shuffle=False, 
+        #                             **kwargs)
+        
+        # for image in dataloader:
+        #     print(image.shape)
+        #     pass
+
         if objective == 'learning':
             list_of_transforms = transforms.Compose([transforms.ToTensor(), 
                                                     transforms.Resize(size=(image_size,image_size))])
+            data_path = '/home/kerencohen2/Git/IGM_CryoEm/data/particles/MRC_0601/10028/data/Particles/MRC_0601'
             # Check if the dataset exists in the specified directory
             if not os.path.exists(data_path):
                 raise ValueError('dataset cryo_empiar10028 invalid')
             
             # load the dataset
-            im_path = os.path.join(data_path, '001_particles_shiny_nb50_new.mrcs')
-            test_imgs.data[0] = aspire.image.load_mrc(im_path)
-            test_imgs.data[0] = torch.from_numpy(test_imgs.data[0])
-            src = test_imgs.data[0]
-            for i in range(1, num_imgs_total):
-                shift_x = random.randint(-image_size / 4, image_size / 4)
-                shift_y = random.randint(-image_size / 4, image_size / 4)
-                test_imgs.data[i] = torch.roll(src, (shift_y, shift_x), dims=(0, 1))
-
-
+            test_imgs = CryoDataset(num_imgs=num_imgs_total,transform=list_of_transforms, data_path=data_path)
+            test_imgs.data = test_imgs.data[:num_imgs_total]
+            
+            if rand_shift:
+                src = test_imgs.data[0]
+                for i in range(1, num_imgs_total):
+                    shift_x = random.randint(-image_size / 4, image_size / 4)
+                    shift_y = random.randint(-image_size / 4, image_size / 4)
+                    test_imgs.data[i] = torch.roll(src, (shift_y, shift_x), dims=(0, 1))
+            # Create a dataloader
+            # dataloader = torch.utils.data.DataLoader(test_imgs,
+            #                             batch_size=1, 
+            #                             pin_memory=False,
+            #                             shuffle=False, 
+            #                             **kwargs)
     else:
         raise ValueError('invalid dataset')
 
@@ -599,6 +660,22 @@ def get_true_and_noisy_data(device,
                         y = y + sigma*torch.randn_like(y).to(device)
                         noisy_imgs.append(y)
             i += 1
+    elif dataset == 'cryo':
+        i = 0
+        if objective == 'learning':
+            for data in enumerate(test_imgs_loader):
+                if i > num_imgs_total:
+                    break
+                else:
+                    if 'multi' not in task:
+                        if task == 'denoising':
+                            noise = sigma*torch.randn(1,1,image_size,image_size).to(device)
+                            x = data.to(device)
+                            true_imgs.append(x)
+                            y = x + noise
+                            noisy_imgs.append(y)
+                    i+=1
+                        
     else:
         i = 0
         if objective == 'learning':
@@ -653,7 +730,7 @@ def get_true_and_noisy_data(device,
                             x = data.to(device)
                             true_imgs.append(x)
                             mag_y, phase_y = forward_model(As, x, task, idx=i, dataset=dataset)
-
+        
                             if hasattr(sigma_v, '__len__') or sigma_v is None:
                                 if dataset == 'm87':
                                     sigma_v_ = sigma_vis

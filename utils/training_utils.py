@@ -154,8 +154,8 @@ class Trainer():
     def get_avg_std_img(self, model, nimg = 40):
         
         #     if self.latent_model == 'flow':
-        model[0] = model[0].to(self.gpu_id).to(self.gpu_id)
-        model[1] = model[1].to(self.gpu_id).to(self.gpu_id)
+        # model[0] = model[0].to(self.gpu_id).to(self.gpu_id)
+        # model[1] = model[1].to(self.gpu_id).to(self.gpu_id)
 
         if (self.latent_model == 'gmm') or (self.latent_model == "gmm_eye"):
             prior = torch.distributions.MultivariateNormal(model[0],
@@ -763,33 +763,43 @@ class Trainer():
                 print("Loss entropy: {}".format(loss_ent_sum / self.norm_factor))
             print("Loss avg mean true: {}".format(avg_org_diff.item() / self.norm_factor))
             print("-----------------------------")
-            if ((k < 500) and (k % 100 == 0)) or ((k >= 500) and (k % 1000 == 0)):
-                if 'multi' in self.task:
-                    img_indices = [i for i in range(self.num_imgs_show // 2)]
-                    img_indices += [self.num_imgs // 2 + i for i in range(self.num_imgs_show)]
-                else:
-                    img_indices = range(self.num_imgs_show)
-                # print("passed before avg_img_list")
-
-                avg_img_list = [self.get_avg_std_img(self.models[i])[0] \
-                    for i in img_indices]
-                std_img_list = [self.get_avg_std_img(self.models[i])[1] \
-                    for i in img_indices]
-                # avg_img_list = [torch.zeros(1, 1, 64).to(self.gpu_id) \
-                #     for i in img_indices]
-                # std_img_list = [torch.zeros(1, 1, 64).to(self.gpu_id) \
-                #     for i in img_indices]
-                # print(f'avg_img_list len={len(avg_img_list)}')
-                # print(f'std_img_list len={len(std_img_list)}')
-                # print("passed all avg_img_list")
+            # if ((k < 500) and (k % 100 == 0)) or ((k >= 500) and (k % 1000 == 0)):
+            #     if 'multi' in self.task:
+            #         img_indices = [i for i in range(self.num_imgs_show // 2)]
+            #         img_indices += [self.num_imgs // 2 + i for i in range(self.num_imgs_show)]
+            #     else:
+            #         img_indices = range(self.num_imgs_show)
+            #     # print("passed before avg_img_list")
                 
-                self.plot_results(self.models, self.generator_func, self.true_imgs, org_targets, self.num_channels,
-                              self.image_size, self.num_imgs_show, self.num_imgs,
-                              self.sigma, avg_img_list, std_img_list, self.save_img, str(k),
-                              self.dropout_val, self.layer_size, self.num_layer_decoder,
-                              self.batchGD, self.dataset, self.folder, self.sup_folder, self.GMM_EPS,
-                              self.task, self.latent_model, self.generator_type, envelope_params=self.envelope_params,
-                              loc_shift=loc_shift, prob_locations=prob_locations)
+            #     avg_img_list = []
+            #     std_img_list = []
+            #     # for j in img_indices:
+            #     #     self.models[j][0].to(self.device)
+            #     #     self.models[j][1].to(self.device)
+            #     #     avg, std = self.get_avg_std_img(self.models[j])
+            #     #     avg_img_list.push(avg)                                                    
+            #     #     std_img_list.push(std)
+                                                    
+            #     # avg_img_list = [self.get_avg_std_img(self.models[i])[0] \
+            #     #     for i in img_indices]
+            #     # std_img_list = [self.get_avg_std_img(self.models[i])[1] \
+            #     #     for i in img_indices]
+                
+            #     avg_img_list = [torch.zeros(1, 1, 64).to(self.gpu_id) \
+            #         for i in img_indices]
+            #     std_img_list = [torch.zeros(1, 1, 64).to(self.gpu_id) \
+            #         for i in img_indices]
+            #     # print(f'avg_img_list len={len(avg_img_list)}')
+            #     # print(f'std_img_list len={len(std_img_list)}')
+            #     # print("passed all avg_img_list")
+                
+            #     self.plot_results(self.models, self.generator_func, self.true_imgs, self.targets, self.num_channels,
+            #                   self.image_size, self.num_imgs_show, self.num_imgs,
+            #                   self.sigma, avg_img_list, std_img_list, self.save_img, str(k),
+            #                   self.dropout_val, self.layer_size, self.num_layer_decoder,
+            #                   self.batchGD, self.dataset, self.folder, self.sup_folder, self.GMM_EPS,
+            #                   self.task, self.latent_model, self.generator_type, envelope_params=self.envelope_params,
+            #                   loc_shift=loc_shift, prob_locations=prob_locations)
 
     def get_statistics(self, loss_data_list, loss_prior_list, loss_list, loss_mag_list, loss_phase_list,
                         loss_centroid_list, loss_ent_list, loss_mean_true_list, org_targets, org_models):
@@ -819,6 +829,7 @@ class Trainer():
         np.save(f'./{self.sup_folder}/{self.folder}/loss_data.npy', loss_data_list)
         np.save(f'./{self.sup_folder}/{self.folder}/loss_prior.npy', loss_prior_list)
         np.save(f'./{self.sup_folder}/{self.folder}/loss_ent.npy', loss_ent_list)
+        np.save(f'./{self.sup_folder}/{self.folder}/loss_mean_true_list.npy', loss_mean_true_list)
         if 'closure-phase' in self.task:
             np.save(f'./{self.sup_folder}/{self.folder}/loss_mag.npy', loss_mag_list)
             np.save(f'./{self.sup_folder}/{self.folder}/loss_phase.npy', loss_phase_list)
@@ -871,14 +882,13 @@ class Trainer():
                      loc_shift=None, prob_locations=None):
         
         for j in range(self.num_imgs):
-            models[j][0] = models[j][0].to(self.device)
-            models[j][1] = models[j][1].to(self.device)
-            true_imgs[j] = true_imgs[j].to(self.device)
-            noisy_imgs[j] = noisy_imgs[j].to(self.device)
+            self.models[j][0] = self.models[j][0].to(self.device)
+            self.models[j][1] = self.models[j][1].to(self.device)
+            self.true_imgs[j] = self.true_imgs[j].to(self.device)
             
         num_samples = 7
     #     num_channels = true_imgs[0].shape[1]
-        latent_dim = models[0][0].shape[0]
+    #    latent_dim = models[0][0].shape[0]
     #     image_size = true_imgs[0].shape[2]
 
         if envelope_params is not None:
@@ -903,7 +913,7 @@ class Trainer():
             fig.suptitle(task + ' with ' + str(num_imgs) + ' images realistic noise std')
         kk = 0
         for ii in img_indices:
-            true = true_imgs[ii].detach().cpu().numpy().reshape([num_channels, image_size, image_size])
+            true = self.true_imgs[ii].detach().cpu().numpy().reshape([num_channels, image_size, image_size])
             true = true[0,:,:].reshape([image_size, image_size])
             if 'denoising' in task and ii < num_imgs_show:
                 noisy = self.targets[ii].detach().cpu().numpy().reshape([num_channels, image_size, image_size])
@@ -919,20 +929,20 @@ class Trainer():
 
 
     #         mu, L = models[ii]
-    #         spread_cov = L@(L.t()) + torch.diag(torch.ones(latent_dim)).to(device)*(GMM_EPS)
+    #         spread_cov = L@(L.t()) + torch.diag(torch.ones(self.latent_dim)).to(device)*(GMM_EPS)
     #         prior = torch.distributions.MultivariateNormal(mu, spread_cov)
 
             if (latent_model == 'gmm') or (latent_model == "gmm_eye"):
-                mu, L = models[ii]
-                spread_cov = (L@(L.t())).to(self.device) + torch.diag(torch.ones(latent_dim)).to(self.device)*(GMM_EPS)
+                mu, L = self.models[ii]
+                spread_cov = (L@(L.t())).to(self.device) + torch.diag(torch.ones(self.latent_dim)).to(self.device)*(GMM_EPS)
                 prior = torch.distributions.MultivariateNormal(mu, spread_cov)
             elif (latent_model == 'gmm_low') or (latent_model == "gmm_low_eye"):
                 mu, L, eps = models[ii]
                 prior = torch.distributions.LowRankMultivariateNormal(mu, L, eps*eps+1e-6)
             elif (latent_model == "gmm_custom"):
                 mu, L = models[ii]
-                spread_cov = (L@(L.t())).to(self.device) + torch.diag(torch.ones(latent_dim)).to(self.device)*(GMM_EPS)
-                prior = GMM_Custom(mu, L, GMM_EPS, self.device, latent_dim)
+                spread_cov = (L@(L.t())).to(self.device) + torch.diag(torch.ones(self.latent_dim)).to(self.device)*(GMM_EPS)
+                prior = GMM_Custom(mu, L, GMM_EPS, self.device, self.latent_dim)
 
 
             z_sample = prior.sample((num_samples,)).to(self.device)
@@ -1011,7 +1021,7 @@ class Trainer():
                 else:
                     np.savez(f"./{sup_folder}/{folder}/noisy_imgs.npz",
                             *[self.targets[i].detach().cpu().numpy() for i in range(len(self.targets))])
-            np.save(f"./{sup_folder}/{folder}/true_imgs.npy", [true_imgs[i].detach().cpu().numpy() for i in range(len(true_imgs))])
+            np.save(f"./{sup_folder}/{folder}/true_imgs.npy", [self.true_imgs[i].detach().cpu().numpy() for i in range(len(true_imgs))])
 
             if prob_locations is not None:
                 prob_locs = prob_locations.detach().cpu().numpy().reshape((image_size, image_size))
