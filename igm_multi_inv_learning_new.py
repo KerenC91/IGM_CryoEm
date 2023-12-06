@@ -24,6 +24,7 @@ from torch.distributed import init_process_group, destroy_process_group
 from torch.utils.data import Dataset, DataLoader
 import time
 import wandb
+from datetime import datetime
 
 # Globals
 DEBUG = False
@@ -133,9 +134,11 @@ def main_function(rank, args):
         dist.barrier()
     # Only gpu 0 operating now...
     if trainer.gpu_id == 0:
-        # wandb.loin()
-        # wandb.init(config=args)
-        # wandb.watch(generator, log_freq=100)
+        wandb.login()
+        wandb.init(project='IGM_CryoEm',
+                   name = f"{args.folder}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}",
+                   config=args)
+        wandb.watch(generator, log_freq=100)
         print(f"Running {os.path.basename(__file__)}"
               f" with {args.nproc} gpus, "
               f"{args.num_epochs} total epochs, "
@@ -272,7 +275,7 @@ if __name__ == "__main__":
                         help='string add to end of directory name for hacky reasons '
                              '(default: "")')
     # Added by Keren
-    parser.add_argument('--normalize_loss', action='store_true', default=False,
+    parser.add_argument('--normalize_loss', action='store_true', default=True,
                         help='normalizing the losses.'
                              '(default: False)')
     parser.add_argument('--rand_shift', action='store_true', default=False,
@@ -284,7 +287,8 @@ if __name__ == "__main__":
     parser.add_argument('--nproc', default=torch.cuda.device_count(),
                         type=int, help='nproc, default is the number of available gpus on the machine')
     parser.add_argument('--sigma_loss', type=float, default=None, 
-            help='loss data regularization. Divide by that sigma instaed of original sigma of the noise.' 
+            help='loss data regularization. Multiply original sigma buy that factor for'
+            'loss data calulation.' 
             'sigma_loss > sigma (default: None)')
     parser.add_argument('--total_variation', type=float, default=None, 
             help='total variation weight. Add total variation regularization to the output image.' 
@@ -302,11 +306,7 @@ if __name__ == "__main__":
     if args.batch_size is None:
         args.batch_size = int(args.num_imgs / args.nproc)
     dtype = torch.FloatTensor
-
-    # regularizers
-    if args.sigma_loss is None:
-        args.sigma_loss = args.sigma
-        
+       
     currentdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
     parentdir = os.path.dirname(currentdir)
     sys.path.insert(0,parentdir)
@@ -337,10 +337,10 @@ if __name__ == "__main__":
     if "multi" in args.task:
         args.sup_folder += f"_multi_{args.sigma_cs}"
     if args.dataset == "MNIST" and args.class_idx is not None: 
-        args.folder = f"{args.dataset}{args.image_size}{args.class_idx}_{args.latent_type}_{args.task}_{args.generator_type}_{str(args.num_imgs)}imgs_{str(args.sigma)}noise_std_dropout{args.dropout_val}_layer_size{args.layer_size}x{args.num_layer_decoder}_latent{args.latent_dim}_seed{args.seed}"
+        args.folder = f"{args.dataset}{args.image_size}_{args.class_idx}_{str(args.num_imgs)}imgs_{str(args.sigma)}noise_std_dropout{args.dropout_val}_layer_size{args.layer_size}x{args.num_layer_decoder}_latent{args.latent_dim}_nsamples{args.num_samples}_epochs{args.num_epochs}_bs{args.batch_size}_lr{args.lr}"
     else:
-        args.folder = f"{args.dataset}{args.image_size}_{args.latent_type}_{args.task}_{args.generator_type}_{str(args.num_imgs)}imgs_{str(args.sigma)}noise_std_dropout{args.dropout_val}_layer_size{args.layer_size}x{args.num_layer_decoder}_latent{args.latent_dim}_seed{args.seed}"
-    if args.latent_type == "gmm" or args.latent_type == "gmm_eye" or args.latent_type == "gmm_custom" or args.latent_type == "gmm_low_eye" or args.latent_type == "gmm_low":
+        args.folder = f"{args.dataset}{args.image_size}_{str(args.num_imgs)}imgs_{str(args.sigma)}noise_std_dropout{args.dropout_val}_layer_size{args.layer_size}x{args.num_layer_decoder}_latent{args.latent_dim}_nsamples{args.num_samples}_epochs{args.num_epochs}_bs{args.batch_size}_lr{args.lr}"
+    if args.latent_type == "gmm_eye" or args.latent_type == "gmm_custom" or args.latent_type == "gmm_low_eye" or args.latent_type == "gmm_low":
         args.folder += f"_eps{args.GMM_EPS}"
     if args.latent_type == "gmm_low_eye" or args.latent_type == "gmm_low":
         args.folder += f"_{args.eps_fixed}"
@@ -360,7 +360,14 @@ if __name__ == "__main__":
             args.folder += f"_centroid{args.centroid[0]:.0e}-{args.centroid[1]:.0e}"
         if args.locshift:
             args.folder += f"_locshift{args.locshift[0]}-{args.locshift[1]}-{args.locshift[2]}-{args.locshift[3]}"
-
+    if args.rand_shift==True:
+        args.folder += "_rand_shift"
+    if args.total_variation: 
+        args.folder += "_tv{args.total_variation}"
+    if args.nproc > 1:
+        args.folder += f"_ngpu{args.nproc}"
+    if args.sigma_loss is not None:
+        args.folder += f"_regFSig{args.sigma_loss}"
     if args.suffix != '':
         args.folder += f"_{args.suffix}"
 
@@ -372,6 +379,12 @@ if __name__ == "__main__":
     with open("{}/args.json".format(f'./{args.sup_folder}/{args.folder}'), 'w') as f:
         json.dump(args.__dict__, f, indent=2)
     
+    # regularizers
+    if args.sigma_loss is None:
+        args.sigma_loss = args.sigma
+    else:
+        args.sigma_loss = args.sigma_loss * args.sigma
+        
     if args.sigma is None and args.dataset in ("m87", "sagA_video"):
         if args.dataset=="sagA_video":
             print("load matrix of sigmas")

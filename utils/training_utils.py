@@ -154,7 +154,7 @@ class Trainer():
                            torch.tril(torch.ones((self.latent_dim, self.latent_dim))).to(self.device)] for i in range(self.num_imgs)]
         return list_of_models
 
-    def tv_loss(img):
+    def tv_loss(self, img):
         # Compute the sum of absolute differences between neighboring pixels
         tv_h = (img[:,:,1:,:] - img[:,:,:-1,:]).pow(2).sum()
         tv_w = (img[:,:,:,1:] - img[:,:,:,:-1]).pow(2).sum()
@@ -756,12 +756,12 @@ class Trainer():
 
                 self.save_model_gen_params(self.generator, self.models, self.optimizer, str(k), self.num_imgs, self.folder,
                                       self.sup_folder, self.latent_model)
-            # if k % self.wandb_log_interval == 0:
-            #     wandb.log({"loss_sum": loss_sum,
-            #     "loss_data_sum": loss_data_sum,
-            #     "loss_prior_sum": loss_prior_sum, 
-            #     "loss_ent_sum": loss_ent_sum,
-            #     "avg_org_diff": avg_org_diff}) 
+            if k % self.wandb_log_interval == 0:
+                wandb.log({"loss_sum": loss_sum,
+                "loss_data_sum": loss_data_sum,
+                "loss_prior_sum": loss_prior_sum, 
+                "loss_ent_sum": loss_ent_sum,
+                "avg_org_diff": avg_org_diff}) 
                 
         # save data
         if self.gpu_id == 0 or (isinstance(self.gpu_id, int) != True):
