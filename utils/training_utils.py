@@ -12,7 +12,7 @@ from .data_utils import get_envelope
 from .eht_utils import loss_angle_diff
 from .vis_utils import latest_epoch_path
 from torch.nn.parallel import DistributedDataParallel as DDP
-
+import wandb
 
 def get_gmm_gen_params(models, generator, num_imgs, model_type, eps_fixed):
     params = []
@@ -145,11 +145,24 @@ class Trainer():
         self.params = get_gmm_gen_params(self.models, self.generator, \
                                          self.num_imgs, self.latent_model, self.eps_fixed)
         self.optimizer = optim.Adam(self.params, lr=self.lr)
-
+        self.sigma_loss = args.sigma_loss
+        self.total_variation = args.total_variation
+        self.wandb_log_interval = args.wandb_log_interval
+        
     def get_latent_model(self):
         list_of_models = [[torch.randn((self.latent_dim,)).to(self.device),
                            torch.tril(torch.ones((self.latent_dim, self.latent_dim))).to(self.device)] for i in range(self.num_imgs)]
         return list_of_models
+
+    def tv_loss(img):
+        # Compute the sum of absolute differences between neighboring pixels
+        tv_h = (img[:,:,1:,:] - img[:,:,:-1,:]).pow(2).sum()
+        tv_w = (img[:,:,:,1:] - img[:,:,:,:-1]).pow(2).sum()
+    
+        # Total variation loss
+        tv_loss = 0.5 * (tv_h + tv_w)
+    
+        return tv_loss
 
     def get_avg_std_img(self, model, nimg = 40):
         
@@ -221,7 +234,7 @@ class Trainer():
         mse = torch.nn.MSELoss()
 
         if task == 'denoising':
-            loss = 0.5 * torch.sum((x - y) ** 2 / sigma ** 2, (-1, -2))
+            loss = 0.5 * torch.sum((x - y) ** 2 / self.sigma_loss ** 2, (-1, -2))
             #print(f'loss data shape {loss.shape}')
         elif task == 'phase-retrieval':
             meas = self.forward_model(A, x, task)
@@ -522,6 +535,7 @@ class Trainer():
         loss_mag_sum = 0
         loss_phase_sum = 0
         loss_centroid_sum = 0
+        loss_tv = 0
         avg_org_diff = 0
         b_sz = len(next(iter(self.train_data))[0])
         
@@ -587,7 +601,7 @@ class Trainer():
                 loss_data = self.loss_data_fit(img, target, self.sigma, self.As, self.task, idx=ind, dataset=self.dataset,
                                           gamma=self.gamma, cp_scale=self.cphase_scale * phase_anneal[k],
                                           use_envelope=use_envelope)
-
+                   
                 if 'closure-phase' in self.task:
                     loss_data, loss_mag, loss_phase = loss_data
     
@@ -597,6 +611,12 @@ class Trainer():
                 else:
                     loss = torch.mean(loss_data + log_ent + loss_prior)
 
+                if self.total_variation:
+                    # Add TV regularization loss
+                    loss_tv = self.tv_loss(img)
+                    loss += self.total_variation * loss_tv
+
+                    
                 loss_sum = loss_sum + loss
                 loss_data_sum = loss_data_sum + torch.mean(loss_data)
                 loss_prior_sum = loss_prior_sum + torch.mean(loss_prior)
@@ -736,6 +756,13 @@ class Trainer():
 
                 self.save_model_gen_params(self.generator, self.models, self.optimizer, str(k), self.num_imgs, self.folder,
                                       self.sup_folder, self.latent_model)
+            # if k % self.wandb_log_interval == 0:
+            #     wandb.log({"loss_sum": loss_sum,
+            #     "loss_data_sum": loss_data_sum,
+            #     "loss_prior_sum": loss_prior_sum, 
+            #     "loss_ent_sum": loss_ent_sum,
+            #     "avg_org_diff": avg_org_diff}) 
+                
         # save data
         if self.gpu_id == 0 or (isinstance(self.gpu_id, int) != True):
             self.get_statistics(loss_data_list, loss_prior_list, loss_list, loss_mag_list, loss_phase_list,

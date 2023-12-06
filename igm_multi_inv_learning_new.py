@@ -23,6 +23,8 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.distributed import init_process_group, destroy_process_group
 from torch.utils.data import Dataset, DataLoader
 import time
+import wandb
+
 # Globals
 DEBUG = False
 
@@ -131,6 +133,9 @@ def main_function(rank, args):
         dist.barrier()
     # Only gpu 0 operating now...
     if trainer.gpu_id == 0:
+        # wandb.loin()
+        # wandb.init(config=args)
+        # wandb.watch(generator, log_freq=100)
         print(f"Running {os.path.basename(__file__)}"
               f" with {args.nproc} gpus, "
               f"{args.num_epochs} total epochs, "
@@ -278,7 +283,15 @@ if __name__ == "__main__":
                         type=int, help='Input batch size on each device (default: None)')
     parser.add_argument('--nproc', default=torch.cuda.device_count(),
                         type=int, help='nproc, default is the number of available gpus on the machine')
-
+    parser.add_argument('--sigma_loss', type=float, default=None, 
+            help='loss data regularization. Divide by that sigma instaed of original sigma of the noise.' 
+            'sigma_loss > sigma (default: None)')
+    parser.add_argument('--total_variation', type=float, default=None, 
+            help='total variation weight. Add total variation regularization to the output image.' 
+            ' (default: None)') 
+    parser.add_argument('--wandb_log_interval', type=int, default=100,
+            help='log interval over epochs for wandb prints to log.' 
+            ' (default: 100)')
     args = parser.parse_args()
     ## debugging args - Keren
     if DEBUG is True:
@@ -290,6 +303,10 @@ if __name__ == "__main__":
         args.batch_size = int(args.num_imgs / args.nproc)
     dtype = torch.FloatTensor
 
+    # regularizers
+    if args.sigma_loss is None:
+        args.sigma_loss = args.sigma
+        
     currentdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
     parentdir = os.path.dirname(currentdir)
     sys.path.insert(0,parentdir)
