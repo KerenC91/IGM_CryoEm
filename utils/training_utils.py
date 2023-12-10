@@ -148,6 +148,7 @@ class Trainer():
         self.sigma_loss = args.sigma_loss
         self.total_variation = args.total_variation
         self.wandb_log_interval = args.wandb_log_interval
+        self.wandb = args.wandb
         
     def get_latent_model(self):
         list_of_models = [[torch.randn((self.latent_dim,)).to(self.device),
@@ -230,27 +231,27 @@ class Trainer():
                 raise ValueError('invalid dataset for task closure-phase')
         return y
 
-    def loss_data_fit(self, x, y, sigma, A, task, dataset, idx, gamma=None, cp_scale=1, use_envelope=False):
-        mse = torch.nn.MSELoss()
+    def loss_data_fit(self, x, y, idx, cp_scale, use_envelope):
+        #mse = torch.nn.MSELoss()
 
-        if task == 'denoising':
+        if self.task == 'denoising':
             loss = 0.5 * torch.sum((x - y) ** 2 / self.sigma_loss ** 2, (-1, -2))
             #print(f'loss data shape {loss.shape}')
-        elif task == 'phase-retrieval':
-            meas = self.forward_model(A, x, task)
-            loss = 0.5 * torch.sum((meas - y) ** 2 / (sigma * A[0]) ** 2, (-1, -2))
-        elif task == 'gauss-phase-retrieval':
-            meas = self.forward_model(A, x, task)
-            loss = 0.5 * torch.sum((meas - y) ** 2 / (sigma) ** 2, (-1, -2))
-        elif task == 'closure-phase':
-            if gamma is None:
+        elif self.task == 'phase-retrieval':
+            meas = self.forward_model(self.As, x, self.task)
+            loss = 0.5 * torch.sum((meas - y) ** 2 / (self.sigma * self.As[0]) ** 2, (-1, -2))
+        elif self.task == 'gauss-phase-retrieval':
+            meas = self.forward_model(self.As, x, self.task)
+            loss = 0.5 * torch.sum((meas - y) ** 2 / (self.sigma) ** 2, (-1, -2))
+        elif self.task == 'closure-phase':
+            if self.gamma is None:
                 raise ValueError('missing gamma for task closure-phase')
 
-            meas_mag, meas_phase = self.forward_model(A, x, task, idx=idx, dataset=dataset,
+            meas_mag, meas_phase = self.forward_model(self.As, x, self.task, idx=idx, dataset=self.dataset,
                                                  use_envelope=use_envelope)
             y_mag, y_phase = y
 
-            sigma_v, sigma_cp = sigma
+            sigma_v, sigma_cp = self.sigma
             if hasattr(sigma_v, "__len__"):
                 loss_mag = 0.5 * torch.sum((meas_mag - y_mag) ** 2 / sigma_v[idx] ** 2, -1)
             else:
@@ -260,18 +261,19 @@ class Trainer():
             else:
                 loss_phase = loss_angle_diff(y_phase, meas_phase, sigma_cp)
 
-            loss_mag_scaled = gamma * loss_mag
+            loss_mag_scaled = self.gamma * loss_mag
             loss_phase_scaled = cp_scale * meas_mag.shape[-1] / meas_phase.shape[-1] * loss_phase
             loss = loss_mag_scaled + loss_phase_scaled
 
             return loss, loss_mag_scaled.detach(), loss_phase_scaled.detach()
         else:
-            meas = self.forward_model(A, x, task, idx=idx, dataset=dataset)
-            if (dataset == "sagA_video" or dataset == "m87") and hasattr(sigma, "__len__"):
+            meas = self.forward_model(self.As, x, self.task, idx=idx, dataset=self.dataset)
+            if (self.dataset == "sagA_video" or self.dataset == "m87") \
+            and hasattr(self.sigma, "__len__"):
                 #             print("new loss")
-                loss = 0.5 * torch.sum((meas - y) ** 2 / sigma[idx] ** 2, (-1, -2))
+                loss = 0.5 * torch.sum((meas - y) ** 2 / self.sigma[idx] ** 2, (-1, -2))
             else:
-                loss = 0.5 * torch.sum((meas - y) ** 2 / sigma ** 2, (-1, -2))
+                loss = 0.5 * torch.sum((meas - y) ** 2 / self.sigma ** 2, (-1, -2))
         return loss
 
     def loss_center(self, device, center=15.5, dim=32):
@@ -541,97 +543,102 @@ class Trainer():
         
         # if k % 50 == 0:
         #     print(f"[GPU{self.gpu_id}] Epoch {k} | Batchsize: {b_sz} | Steps: {len(self.train_data)}")
-        for models, idx, targets in self.train_data:
+        #for models, idx, targets in self.train_data:
+        for mu, L, idx, true, target in self.train_data:
             # if k % 50 == 0:
             #     print(f'gpu{self.gpu_id}, Epoch {k}, idx={idx}')
-            for j in idx:
-                ind = j.item()
-                model = self.models[ind]
-                target = self.targets[ind].to(self.gpu_id)
+            #something here is fishy...
+            mu = mu.squeeze(0).squeeze(0).to(self.gpu_id)
+            L = L.squeeze(0).to(self.gpu_id)
+            i = idx.item()
+            true = true.squeeze(0).to(self.gpu_id)
+            target = target.squeeze(0).to(self.gpu_id)
+            
+            if self.batchGD == False:
+                self.optimizer.zero_grad()
                 
-                if self.batchGD == False:
-                    self.optimizer.zero_grad()
-                    
-                if (self.latent_model == 'gmm') or (self.latent_model == "gmm_eye"):
-                    mu, L = model[0].to(self.device), model[1].to(self.device)
-                    spread_cov = (L @ (L.t())).to(self.device) + torch.diag(torch.ones(self.latent_dim)).to(self.device) * (self.GMM_EPS)
-                    prior = torch.distributions.MultivariateNormal(mu, spread_cov, validate_args=self.validate_args)
-                elif (self.latent_model == 'gmm_low') or (self.latent_model == "gmm_low_eye"):
-                    mu, L, eps = models[ind]
-                    #                     print(eps*eps)
-                    prior = torch.distributions.LowRankMultivariateNormal(mu, L, eps * eps + 1e-6,
-                                                                          validate_args=self.validate_args)
-                elif (self.latent_model == "gmm_custom"):
-                    mu, L = models[ind]
-                    spread_cov = (L @ (L.t())).to(self.device) + torch.diag(torch.ones(self.latent_dim)).to(self.device) * (self.GMM_EPS)
-                    prior = GMM_Custom(mu, L, self.GMM_EPS, self.device, self.latent_dim, validate_args=self.validate_args)
-                
-                #if ind < self.num_imgs_show: # evaluation
-                avg_org_diff += torch.norm(self.generator_func(mu.unsqueeze(0)) - self.true_imgs[ind]).item() / torch.norm(self.true_imgs[ind]).item()
+            if (self.latent_model == 'gmm') or (self.latent_model == "gmm_eye"):
+                #mu, L = models[0].to(self.device), models[1].to(self.device)
+                spread_cov = (L @ (L.t())).to(self.device) + torch.diag(torch.ones(self.latent_dim)).to(self.device) * (self.GMM_EPS)
+                prior = torch.distributions.MultivariateNormal(mu, spread_cov, validate_args=self.validate_args)
+            elif (self.latent_model == 'gmm_low') or (self.latent_model == "gmm_low_eye"):
+                #mu, L, eps = models[ind]
+                #                     print(eps*eps)
+                prior = torch.distributions.LowRankMultivariateNormal(mu, L, eps * eps + 1e-6,
+                                                                      validate_args=self.validate_args)
+            elif (self.latent_model == "gmm_custom"):
+                #mu, L = models[ind]
+                spread_cov = (L @ (L.t())).to(self.device) + torch.diag(torch.ones(self.latent_dim)).to(self.device) * (self.GMM_EPS)
+                prior = GMM_Custom(mu, L, self.GMM_EPS, self.device, self.latent_dim, validate_args=self.validate_args)
+            
+            #if ind < self.num_imgs_show: # evaluation
+            mu_image = self.generator_func(mu.unsqueeze(0))
+            avg_org_diff += torch.norm(mu_image - true).item() / torch.norm(true).item()
 
-                z_sample = prior.sample((self.num_samples,)).to(self.device)
-    
+            z_sample = prior.sample((self.num_samples,)).to(self.device)
+
+            if self.generator_type == "norm_flow":
+                img, logdet = self.generator_func(z_sample)
+                img = img.reshape([self.num_samples, self.image_size, self.image_size])
+            else:
+                img = self.generator_func(z_sample)
+
+            if self.no_entropy == True:
+                log_ent = 0
+            else:
                 if self.generator_type == "norm_flow":
-                    img, logdet = self.generator_func(z_sample)
-                    img = img.reshape([self.num_samples, self.image_size, self.image_size])
+                    log_ent = prior.log_prob(z_sample)  # + logdet
                 else:
-                    img = self.generator_func(z_sample)
-    
-                if self.no_entropy == True:
-                    log_ent = 0
-                else:
-                    if self.generator_type == "norm_flow":
-                        log_ent = prior.log_prob(z_sample)  # + logdet
-                    else:
-                        log_ent = prior.log_prob(z_sample)
-    
-                loss_prior = 0.5 * torch.sum(z_sample ** 2, 1)
-    
-                if loc_shift is not None:
-                    filters, envelope = loc_shift
-                    if learn_locshift:
-                        samples = WeightedRandomSampler(prob_locations, img.shape[0], replacement=True)
-                        samples = list(samples)
-                        filters = filters[samples]
-    
-                    img = envelope * img
-                    img = functional.conv2d(filters.transpose(0, 1), img.flip((3)).flip((2)),
-                                            padding='same', groups=filters.shape[0]).transpose(0, 1)
-                #img = 
-                loss_data = self.loss_data_fit(img, target, self.sigma, self.As, self.task, idx=ind, dataset=self.dataset,
-                                          gamma=self.gamma, cp_scale=self.cphase_scale * phase_anneal[k],
-                                          use_envelope=use_envelope)
-                   
-                if 'closure-phase' in self.task:
-                    loss_data, loss_mag, loss_phase = loss_data
-    
-                if self.centroid_params:
-                    loss_centroid = centroid_anneal[k] * centroid_loss_wt * loss_centroid_fit(img)
-                    loss = torch.mean(loss_data + log_ent + loss_prior + loss_centroid)
-                else:
-                    loss = torch.mean(loss_data + log_ent + loss_prior)
+                    log_ent = prior.log_prob(z_sample)
 
-                if self.total_variation:
-                    # Add TV regularization loss
-                    loss_tv = self.tv_loss(img)
-                    loss += self.total_variation * loss_tv
+            loss_prior = 0.5 * torch.sum(z_sample ** 2, 1)
 
-                    
-                loss_sum = loss_sum + loss
-                loss_data_sum = loss_data_sum + torch.mean(loss_data)
-                loss_prior_sum = loss_prior_sum + torch.mean(loss_prior)
-    
-                if 'closure-phase' in self.task:
-                    loss_mag_sum += torch.mean(loss_mag)
-                    loss_phase_sum += torch.mean(loss_phase)
-                if self.centroid_params:
-                    loss_centroid_sum += torch.mean(loss_centroid)
-                if self.no_entropy == False:
-                    loss_ent_sum = loss_ent_sum + torch.mean(log_ent)
-    
-                if self.batchGD == False:
-                    loss.backward(retain_graph=True)
-                    self.optimizer.step()
+            if loc_shift is not None:
+                filters, envelope = loc_shift
+                if learn_locshift:
+                    samples = WeightedRandomSampler(prob_locations, img.shape[0], replacement=True)
+                    samples = list(samples)
+                    filters = filters[samples]
+
+                img = envelope * img
+                img = functional.conv2d(filters.transpose(0, 1), img.flip((3)).flip((2)),
+                                        padding='same', groups=filters.shape[0]).transpose(0, 1)
+            #img = 
+            loss_data = self.loss_data_fit(img, target, idx=i, 
+                                           cp_scale=self.cphase_scale * phase_anneal[k],
+                                           use_envelope=use_envelope)
+               
+            if 'closure-phase' in self.task:
+                loss_data, loss_mag, loss_phase = loss_data
+
+            if self.centroid_params:
+                loss_centroid = centroid_anneal[k] * centroid_loss_wt * loss_centroid_fit(img)
+                loss = torch.mean(loss_data + log_ent + loss_prior + loss_centroid)
+            else:
+                loss = torch.mean(loss_data + log_ent + loss_prior)
+
+            if self.total_variation:
+                # Add TV regularization loss
+                loss_tv = self.tv_loss(img)
+                loss += self.total_variation * loss_tv
+
+                
+            loss_sum = loss_sum + loss
+            loss_data_sum = loss_data_sum + torch.mean(loss_data)
+            loss_prior_sum = loss_prior_sum + torch.mean(loss_prior)
+
+            if 'closure-phase' in self.task:
+                loss_mag_sum += torch.mean(loss_mag)
+                loss_phase_sum += torch.mean(loss_phase)
+            if self.centroid_params:
+                loss_centroid_sum += torch.mean(loss_centroid)
+            if self.no_entropy == False:
+                loss_ent_sum = loss_ent_sum + torch.mean(log_ent)
+
+            if self.batchGD == False:
+            #end batch loop
+                loss.backward(retain_graph=True)
+                self.optimizer.step()
         if self.batchGD == True:
             loss_sum.backward(retain_graph=True)
             self.optimizer.step()
@@ -747,22 +754,27 @@ class Trainer():
                 
                 self.plot_epoch_results(k, loss_sum, loss_data_sum, loss_prior_sum,
                         loss_ent_sum, loss_mag_sum, loss_phase_sum, loss_centroid_sum, avg_org_diff,
-                        self.targets, self.models, loc_shift, prob_locations)
-    
-            if self.gpu_id == 0 and k % self.save_every == 0:
-                self._save_checkpoint(k)
-                self.checkpoint_results(self.latent_dim, self.generator_func, self.models, str(k), self.num_imgs,
-                                   self.GMM_EPS, self.folder, self.sup_folder, self.latent_model, self.image_size, self.generator_type)
-
-                self.save_model_gen_params(self.generator, self.models, self.optimizer, str(k), self.num_imgs, self.folder,
-                                      self.sup_folder, self.latent_model)
-            if k % self.wandb_log_interval == 0:
-                wandb.log({"loss_sum": loss_sum,
-                "loss_data_sum": loss_data_sum,
-                "loss_prior_sum": loss_prior_sum, 
-                "loss_ent_sum": loss_ent_sum,
-                "avg_org_diff": avg_org_diff}) 
-                
+                        loc_shift, prob_locations)
+                #print(f'gpu{self.gpu_id}: 1 got here')
+                if k % self.save_every == 0:
+                    #print(f'gpu{self.gpu_id}: 2 got here')
+                    self._save_checkpoint(k)
+                    self.checkpoint_results(self.latent_dim, self.generator_func, self.models, str(k), self.num_imgs,
+                                       self.GMM_EPS, self.folder, self.sup_folder, self.latent_model, self.image_size, self.generator_type)
+                    #print(f'gpu{self.gpu_id}: 3 got here')
+                    self.save_model_gen_params(self.generator, self.models, self.optimizer, str(k), self.num_imgs, self.folder,
+                                          self.sup_folder, self.latent_model)
+                    #print(f'gpu{self.gpu_id}: 4 got here')
+                    
+                if self.wandb:
+                    if k % self.wandb_log_interval == 0:
+                        #print(f'gpu{self.gpu_id}: 5 got here')
+                        wandb.log({"loss_sum": loss_sum,
+                        "loss_data_sum": loss_data_sum,
+                        "loss_prior_sum": loss_prior_sum, 
+                        "loss_ent_sum": loss_ent_sum,
+                        "avg_org_diff": avg_org_diff}) 
+                        #print(f'gpu{self.gpu_id}: 6 got here')
         # save data
         if self.gpu_id == 0 or (isinstance(self.gpu_id, int) != True):
             self.get_statistics(loss_data_list, loss_prior_list, loss_list, loss_mag_list, loss_phase_list,
@@ -771,7 +783,7 @@ class Trainer():
 
     def plot_epoch_results(self, k, loss_sum, loss_data_sum, loss_prior_sum,
                         loss_ent_sum, loss_mag_sum, loss_phase_sum, loss_centroid_sum, avg_org_diff,
-                        org_targets, org_models, loc_shift, prob_locations):
+                        loc_shift, prob_locations):
         if k % 50 == 0:
             print("-----------------------------")
             print("Epoch {}".format(k))

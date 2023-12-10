@@ -29,23 +29,25 @@ DEBUG = True
 
 class MyDataset(Dataset):
     
-    def __init__(self, tensor_list, noisy_targets):
-        self.tensor_list = tensor_list
+    def __init__(self, models, true_imgs, noisy_targets):
+        self.models = models
         self.noisy_targets = noisy_targets
-
+        self.true_imgs = true_imgs
+        
     def __len__(self):
-        return len(self.tensor_list)
+        return len(self.models)
 
     def __getitem__(self, idx):
-        mu = self.tensor_list[idx][0].unsqueeze(0) #torch.Size([1, 40])
-        L = self.tensor_list[idx][1] #torch.Size([40, 40])
+        mu = self.models[idx][0].unsqueeze(0) #torch.Size([1, 40])
+        L = self.models[idx][1] #torch.Size([40, 40])
         target = self.noisy_targets[idx]
-        
+        true = self.true_imgs[idx] 
         mu = mu.to('cuda')
         L = L.to('cuda')
         target = target.to('cuda')
-        return torch.cat([mu, L], dim=0), idx, target
-
+        true = true.to('cuda')
+        return mu, L, idx, true, target
+    
 # def ddp_setup(rank, world_size):
 #     os.environ["MASTER_ADDR"] = "localhost"
 #     os.environ["MASTER_PORT"] = "12532" #any free port
@@ -94,7 +96,7 @@ def load_train_objs(rank, args):
     # Get latent GMM model
     models = model_utils.get_latent_model(rank, args.latent_dim, args.num_imgs, args.latent_type)
     #I have to convert models to be a Dataset, as in from torch.utils.data import Dataset
-    dataset = MyDataset(models, noisy)
+    dataset = MyDataset(models=models, true_imgs=true, noisy_targets=noisy)
 
     return true, noisy, A, sigma, kernels, models,\
         dataset, generator, G
@@ -136,6 +138,7 @@ def main_function(rank, args):
               f"{args.batch_size}={len(next(iter(train_data))[0])} batch size, "
           f"save checkpoint every {args.save_every} epochs")
     print(f"Normalization factor={(trainer.world_size * trainer.batch_size * len(trainer.train_data))}")
+    print(f"len(trainer.models)={len(trainer.models)}")
     start_time = time.time()
 
     # Learn the IGM
@@ -256,7 +259,7 @@ if __name__ == "__main__":
                         help='string add to end of directory name for hacky reasons '
                              '(default: "")')
     # Added by Keren
-    parser.add_argument('--normalize_loss', action='store_true', default=False,
+    parser.add_argument('--normalize_loss', action='store_true', default=True,
                         help='normalizing the losses.'
                              '(default: False)')
     parser.add_argument('--rand_shift', action='store_true', default=False,
@@ -267,7 +270,19 @@ if __name__ == "__main__":
                         type=int, help='Input batch size on each device (default: None)')
     parser.add_argument('--nproc', default=torch.cuda.device_count(),
                         type=int, help='nproc, default is the number of available gpus on the machine')
-
+    parser.add_argument('--sigma_loss', type=float, default=None, 
+            help='loss data regularization. Multiply original sigma buy that factor for'
+            'loss data calulation.' 
+            'sigma_loss > sigma (default: None)')
+    parser.add_argument('--total_variation', type=float, default=None, 
+            help='total variation weight. Add total variation regularization to the output image.' 
+            ' (default: None)') 
+    parser.add_argument('--wandb_log_interval', type=int, default=100,
+            help='log interval over epochs for wandb prints to log.' 
+            ' (default: 100)')
+    parser.add_argument('--wandb', action='store_true', default=False,
+                        help='Activate wandb')
+    
     args = parser.parse_args()
     ## debugging args - Keren
     if DEBUG is True:
@@ -330,10 +345,10 @@ if __name__ == "__main__":
     if "multi" in args.task:
         args.sup_folder += f"_multi_{args.sigma_cs}"
     if args.dataset == "MNIST" and args.class_idx is not None: 
-        args.folder = f"{args.dataset}{args.image_size}{args.class_idx}_{args.latent_type}_{args.task}_{args.generator_type}_{str(args.num_imgs)}imgs_{str(args.sigma)}noise_std_dropout{args.dropout_val}_layer_size{args.layer_size}x{args.num_layer_decoder}_latent{args.latent_dim}_seed{args.seed}"
+        args.folder = f"{args.dataset}{args.image_size}_{args.class_idx}_{str(args.num_imgs)}imgs_{str(args.sigma)}noise_std_dropout{args.dropout_val}_layer_size{args.layer_size}x{args.num_layer_decoder}_latent{args.latent_dim}_nsamples{args.num_samples}_epochs{args.num_epochs}_bs{args.batch_size}_lr{args.lr}"
     else:
-        args.folder = f"{args.dataset}{args.image_size}_{args.latent_type}_{args.task}_{args.generator_type}_{str(args.num_imgs)}imgs_{str(args.sigma)}noise_std_dropout{args.dropout_val}_layer_size{args.layer_size}x{args.num_layer_decoder}_latent{args.latent_dim}_seed{args.seed}"
-    if args.latent_type == "gmm" or args.latent_type == "gmm_eye" or args.latent_type == "gmm_custom" or args.latent_type == "gmm_low_eye" or args.latent_type == "gmm_low":
+        args.folder = f"{args.dataset}{args.image_size}_{str(args.num_imgs)}imgs_{str(args.sigma)}noise_std_dropout{args.dropout_val}_layer_size{args.layer_size}x{args.num_layer_decoder}_latent{args.latent_dim}_nsamples{args.num_samples}_epochs{args.num_epochs}_bs{args.batch_size}_lr{args.lr}"
+    if args.latent_type == "gmm_eye" or args.latent_type == "gmm_custom" or args.latent_type == "gmm_low_eye" or args.latent_type == "gmm_low":
         args.folder += f"_eps{args.GMM_EPS}"
     if args.latent_type == "gmm_low_eye" or args.latent_type == "gmm_low":
         args.folder += f"_{args.eps_fixed}"
@@ -354,9 +369,19 @@ if __name__ == "__main__":
         if args.locshift:
             args.folder += f"_locshift{args.locshift[0]}-{args.locshift[1]}-{args.locshift[2]}-{args.locshift[3]}"
 
+    if args.rand_shift==True:
+        args.folder += "_rand_shift"
+    if args.total_variation: 
+        args.folder += "_tv{args.total_variation}"
+    if args.nproc > 1:
+        args.folder += f"_ngpu{args.nproc}"
+    if args.sigma_loss is not None:
+        args.folder += f"_regFSig{args.sigma_loss}"
     if args.suffix != '':
         args.folder += f"_{args.suffix}"
-
+    if DEBUG is True:
+       args.folder += f"_{DEBUG}" 
+       
     if not os.path.exists(f'./{args.sup_folder}/{args.folder}'):
         os.makedirs(f'./{args.sup_folder}/{args.folder}')
     if not os.path.exists(f'./{args.sup_folder}/{args.folder}/model_checkpoints'):
@@ -364,7 +389,13 @@ if __name__ == "__main__":
     
     with open("{}/args.json".format(f'./{args.sup_folder}/{args.folder}'), 'w') as f:
         json.dump(args.__dict__, f, indent=2)
-    
+
+    # regularizers
+    if args.sigma_loss is None:
+        args.sigma_loss = args.sigma
+    else:
+        args.sigma_loss = args.sigma_loss * args.sigma
+        
     if args.sigma is None and args.dataset in ("m87", "sagA_video"):
         if args.dataset=="sagA_video":
             print("load matrix of sigmas")

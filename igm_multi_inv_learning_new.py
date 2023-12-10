@@ -31,22 +31,24 @@ DEBUG = False
 
 class MyDataset(Dataset):
     
-    def __init__(self, tensor_list, noisy_targets):
-        self.tensor_list = tensor_list
+    def __init__(self, models, true_imgs, noisy_targets):
+        self.models = models
         self.noisy_targets = noisy_targets
-
+        self.true_imgs = true_imgs
+        
     def __len__(self):
-        return len(self.tensor_list)
+        return len(self.models)
 
     def __getitem__(self, idx):
-        mu = self.tensor_list[idx][0].unsqueeze(0) #torch.Size([1, 40])
-        L = self.tensor_list[idx][1] #torch.Size([40, 40])
+        mu = self.models[idx][0].unsqueeze(0) #torch.Size([1, 40])
+        L = self.models[idx][1] #torch.Size([40, 40])
         target = self.noisy_targets[idx]
-        
+        true = self.true_imgs[idx] 
         mu = mu.to('cpu')
         L = L.to('cpu')
         target = target.to('cpu')
-        return torch.cat([mu, L], dim=0), idx, target
+        true = true.to('cpu')
+        return mu, L, idx, true, target
 
 def ddp_setup(rank, world_size):
     os.environ["MASTER_ADDR"] = "localhost"
@@ -96,7 +98,7 @@ def load_train_objs(rank, args):
     # Get latent GMM model
     models = model_utils.get_latent_model(rank, args.latent_dim, args.num_imgs, args.latent_type)
     #I have to convert models to be a Dataset, as in from torch.utils.data import Dataset
-    dataset = MyDataset(models, noisy)
+    dataset = MyDataset(models=models, true_imgs=true, noisy_targets=noisy)
 
     return true, noisy, A, sigma, kernels, models,\
         dataset, generator, G
@@ -134,11 +136,12 @@ def main_function(rank, args):
         dist.barrier()
     # Only gpu 0 operating now...
     if trainer.gpu_id == 0:
-        wandb.login()
-        wandb.init(project='IGM_CryoEm',
-                   name = f"{args.folder}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}",
-                   config=args)
-        wandb.watch(generator, log_freq=100)
+        if args.wandb:
+            wandb.login()
+            wandb.init(project='IGM_CryoEm',
+                       name = f"{args.folder}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}",
+                       config=args)
+            wandb.watch(generator, log_freq=100)
         print(f"Running {os.path.basename(__file__)}"
               f" with {args.nproc} gpus, "
               f"{args.num_epochs} total epochs, "
@@ -296,6 +299,9 @@ if __name__ == "__main__":
     parser.add_argument('--wandb_log_interval', type=int, default=100,
             help='log interval over epochs for wandb prints to log.' 
             ' (default: 100)')
+    parser.add_argument('--wandb', action='store_true', default=True,
+                        help='Activate wandb')
+    
     args = parser.parse_args()
     ## debugging args - Keren
     if DEBUG is True:
@@ -304,7 +310,7 @@ if __name__ == "__main__":
     # ddp setup
     # rank is the device
     if args.batch_size is None:
-        args.batch_size = int(args.num_imgs / args.nproc)
+        args.batch_size = 1#int(args.num_imgs / args.nproc)
     dtype = torch.FloatTensor
        
     currentdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
@@ -370,7 +376,9 @@ if __name__ == "__main__":
         args.folder += f"_regFSig{args.sigma_loss}"
     if args.suffix != '':
         args.folder += f"_{args.suffix}"
-
+    if DEBUG is True:
+       args.folder += f"_{DEBUG}"
+       
     if not os.path.exists(f'./{args.sup_folder}/{args.folder}'):
         os.makedirs(f'./{args.sup_folder}/{args.folder}')
     if not os.path.exists(f'./{args.sup_folder}/{args.folder}/model_checkpoints'):

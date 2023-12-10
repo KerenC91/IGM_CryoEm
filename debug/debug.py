@@ -18,7 +18,7 @@ def set_args(args: Namespace):
     args.latent_dim = 40
     args.generator_type = 'deepdecoder'
     args.num_imgs = 5
-    args.dataset = 'cryo'#'MNIST'
+    args.dataset = 'MNIST'
     args.sigma = 0.5
     args.image_size = 64
     args.batchGD = True
@@ -28,7 +28,8 @@ def set_args(args: Namespace):
     args.normalize_loss = True
     args.suffix = "debug"
     args.nproc = 1
-    #args.batch_size = 1
+    args.batch_size = 1
+    args.wandb = False
 
 
 def get_loss(f_loss, f_loss_ent, f_loss_prior, f_loss_data, num_epoch):
